@@ -1,5 +1,5 @@
 {
-  "name": "utility-agent",
+  "name": "CLImate",
   "module": "index.ts",
   "type": "module",
   "scripts": {

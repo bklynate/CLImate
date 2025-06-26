@@ -1,9 +1,9 @@
-### **Utility Agent**
+### **CLImate**
 
 ---
 
 ### **Description**
-The **Utility Agent** is a command-line interface (CLI) program built with TypeScript. It integrates tools, APIs, and memory to act as an intelligent agent for fetching data, interacting with APIs, and running automated tasks. With robust integration with libraries like OpenAI, Puppeteer, and more, it offers an extensible foundation for creating custom workflows.
+The **CLImate** is a command-line interface (CLI) program built with TypeScript. It integrates tools, APIs, and memory to act as an intelligent agent for fetching data, interacting with APIs, and running automated tasks. With robust integration with libraries like OpenAI, Puppeteer, and more, it offers an extensible foundation for creating custom workflows.
 
 ---
 
