@@ -1,7 +1,8 @@
 import type OpenAI from 'openai';
-import { queryDuckDuckGo } from './tools/webScraper/queryDuckDuckGo';
+import { queryDuckDuckGo } from '@tools/webScraper/queryDuckDuckGo';
+import { fetchTrackedSports, getOddsUSA } from '@tools/bettingOdds';
 import { currentWeather } from '@tools/weather';
-import { currentLocationTool } from '@src/tools/currentLocation';
+import { currentLocationTool } from '@tools/currentLocation';
 import logger from '@utils/logger';
 
 // Map of tool functions
@@ -9,6 +10,8 @@ const toolFunctions: Record<string, Function> = {
   query_duckduckgo: queryDuckDuckGo,
   current_weather: currentWeather,
   current_location: currentLocationTool,
+  // fetchTrackedSports,
+  // getOddsUSA,
 };
 
 export const runTool = async (

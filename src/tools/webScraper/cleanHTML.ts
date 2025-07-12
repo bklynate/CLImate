@@ -2,101 +2,137 @@ import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { addMessages } from '@src/memory';
-import logger from '@utils/logger';
 import { pipeline } from '@xenova/transformers';
+import { Tabletojson } from 'tabletojson';
 
 process.env.ORT_LOG_SEVERITY_LEVEL = '3';
 
 let summarizer: any;
-const turndownService = new TurndownService();
 
-/**
- * Lazy-loads the transformer summarizer.
- */
 async function getSummarizer() {
   if (!summarizer) {
-    logger.info('Loading summarization model...');
     summarizer = await pipeline('summarization', 'Xenova/distilbart-cnn-12-6');
   }
   return summarizer;
 }
 
-/**
- * Performs recursive summarization using a max word chunk size.
- */
-async function summarizeLongText(text: string, chunkSize = 512): Promise<string> {
-  const summarizationPipeline = await getSummarizer();
-  const words = text.split(/\s+/);
+const UNWANTED = [
+  '.share', '.social', '.ad', '.promo', '.footer', '.related', '.tags',
+  '.author-box', 'nav', 'form', '[hidden]', '[aria-hidden="true"]'
+];
 
-  if (words.length <= chunkSize) {
-    const summaryArray = await summarizationPipeline(text);
-    return summaryArray?.[0]?.summary_text?.trim() || '';
-  }
-
-  const chunks: string[] = [];
-  for (let i = 0; i < words.length; i += chunkSize) {
-    chunks.push(words.slice(i, i + chunkSize).join(' '));
-  }
-
-  const summaries = [];
-  for (const chunk of chunks) {
-    const summaryArray = await summarizationPipeline(chunk);
-    summaries.push(summaryArray?.[0]?.summary_text?.trim() || '');
-  }
-
-  const combined = summaries.join(' ');
-  return combined.split(/\s+/).length > chunkSize
-    ? summarizeLongText(combined, chunkSize)
-    : combined;
+function removeBoilerplate(node: Element) {
+  UNWANTED.forEach((sel) => {
+    node.querySelectorAll(sel).forEach((el) => el.remove());
+  });
 }
 
-/**
- * Extracts main article content and converts it to Markdown or summarized text.
- */
+const turndownService = new TurndownService({
+  headingStyle: 'atx',
+  bulletListMarker: '-',
+  codeBlockStyle: 'fenced',
+});
+
+turndownService.addRule('headingHR', {
+  filter: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+  replacement: (content, node) => {
+    const level = Number((node as Element).tagName.substring(1));
+    return `\n\n---\n\n${'#'.repeat(level)} ${content}\n\n`;
+  },
+});
+
+turndownService.addRule('preserveTable', {
+  filter: 'table',
+  replacement: (content, node) => {
+    try {
+      const json = Tabletojson.convert((node as Element).outerHTML);
+      return `\n\n\`\`\`json\n${JSON.stringify(json, null, 2)}\n\`\`\`\n\n`;
+    } catch (e) {
+      return content;
+    }
+  },
+});
+
+function dedupeLines(markdown: string): string {
+  const seen = new Set<string>();
+  return markdown
+    .split('\n')
+    .filter((line) => {
+      const key = line.trim();
+      if (!key || key.startsWith('#')) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join('\n');
+}
+
+function prettyWhitespace(markdown: string): string {
+  return markdown
+    .replace(/[ \t]+\n/g, '\n') // trailing spaces
+    .replace(/\n{3,}/g, '\n\n') // collapse ≥3 newlines
+    .replace(/^\*{2,}/gm, '*') // "***" → "*"
+    .replace(/^[·•]/gm, '*') // normalize bullets
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[—–]/g, '-')
+    .replace(/ /g, ' ') // narrow space
+    .replace(/\.{3,}/g, '…'); // long ellipses
+}
+
+async function summarizeMarkdown(markdown: string, maxChunkWords = 700): Promise<string> {
+  const summarizerPipeline = await getSummarizer();
+  const sections = markdown.split(/\n---\n/);
+  const summaries: string[] = [];
+
+  for (const section of sections) {
+    const wordCount = section.trim().split(/\s+/).length;
+    if (wordCount > maxChunkWords) {
+      const summary = await summarizerPipeline(section, {
+        max_length: 180,
+        min_length: 60,
+        no_repeat_ngram_size: 3,
+      });
+      summaries.push(summary?.[0]?.summary_text?.trim() || '');
+    } else {
+      summaries.push(section.trim());
+    }
+  }
+
+  return summaries.join('\n\n---\n\n');
+}
+
 export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
   try {
     const dom = new JSDOM(rawHtml, { url });
-    const reader = new Readability(dom.window.document);
+    const reader = new Readability(dom.window.document, { charThreshold: 500 });
     const article = reader.parse();
 
-    if (!article || (!article.content && !article.textContent)) {
-      logger.warn(`Readability could not extract content from ${url}`);
+    if (!article?.content) {
       await addMessages([
         {
           role: 'assistant',
-          content: `No readable content found at ${url}. I’ll try another approach if needed.`,
+          content: `No readable content found at ${url}.`,
         },
       ]);
       return '';
     }
 
-    if (article.content) {
-      // Preserve structural richness
-      const markdown = turndownService.turndown(article.content);
-      logger.info(`Successfully converted content from ${url} to markdown.`);
-      return markdown;
-    }
+    // Remove junk inside article body
+    const bodyDom = new JSDOM(article.content, { url });
+    const body = bodyDom.window.document.body;
+    removeBoilerplate(body);
 
-    // Fallback: summarize plain text if content block was missing
-    const extractedText = article.textContent.replace(/\s{2,}/g, ' ').trim();
-    logger.info(`Summarizing extracted plain text from ${url}`);
-    const summary = await summarizeLongText(extractedText, 512);
+    // Convert to Markdown
+    let markdown = turndownService.turndown(body.innerHTML);
+    markdown = dedupeLines(prettyWhitespace(markdown));
 
-    if (!summary) {
-      logger.error(`Summarization failed for ${url}`);
-      await addMessages([
-        {
-          role: 'assistant',
-          content: `Something went wrong while summarizing content from ${url}.`,
-        },
-      ]);
-      return '';
-    }
+    // Summarize if oversized
+    const cleaned = await summarizeMarkdown(markdown);
 
-    logger.info(`Summarization complete for ${url}`);
-    return summary;
+    return cleaned;
   } catch (error: any) {
-    logger.error(`Error processing HTML from ${url}:`, error?.message || error);
-    throw new Error(`Error extracting and summarizing content from ${url}`);
+    console.error(`Failed to clean HTML from ${url}:`, error?.message || error);
+    throw new Error(`Error cleaning HTML from ${url}`);
   }
 }

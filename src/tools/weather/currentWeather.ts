@@ -16,13 +16,13 @@ export const currentWeatherToolDefinition = {
         .string()
         .optional()
         .describe(
-          '(Optional) request to explain the reasoning behind the output. Example: "Explain the factors that led to this conclusion."'
+          '(Optional) request to explain the reasoning behind the output. Example: "Explain the factors that led to this conclusion."',
         ),
       reflection: z
         .string()
         .optional()
         .describe(
-          '(Optional) request to evaluate your process and output. Example: "Check for missing or inconsistent data."'
+          '(Optional) request to evaluate your process and output. Example: "Check for missing or inconsistent data."',
         ),
     })
     .describe('Input parameters for retrieving weather data.'),
@@ -44,8 +44,8 @@ export const currentWeather: ToolFn<Args, string> = async ({
   }
 
   const url = `https://api.tomorrow.io/v4/weather/realtime?location=${encodeURIComponent(
-    city
-  )}&apikey=${apiKey}`;
+    city,
+  )}&apikey=${apiKey}&metrics=imperial`;
 
   try {
     // Fetch weather data
@@ -71,7 +71,7 @@ export const currentWeather: ToolFn<Args, string> = async ({
     } else {
       logger.error(
         `An unknown error occurred fetching data for ${city}:`,
-        error
+        error,
       );
       throw new Error('An unknown error occurred while fetching weather data.');
     }

@@ -7,7 +7,6 @@ import { z } from 'zod';
 import { cleanHtml } from './cleanHTML';
 import logger from '@utils/logger';
 import * as use from '@tensorflow-models/universal-sentence-encoder';
-import { parse } from 'path';
 
 puppeteer.use(StealthPlugin());
 
@@ -134,8 +133,6 @@ async function fetchPageContent(url: string): Promise<string> {
 // --- Main Tool Entry Point ---
 export const queryDuckDuckGo: ToolFn<Args, string> = async ({ toolArgs }) => {
   const { query, numOfResults } = toolArgs;
-
-  console.log('Here istoolArgs:', toolArgs);
 
   const searchResults = await fetchDuckDuckGoResultsWithRelevance(query);
 
