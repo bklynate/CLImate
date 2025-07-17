@@ -3,6 +3,7 @@ import { queryDuckDuckGo } from '@tools/webScraper/queryDuckDuckGo';
 import { fetchTrackedSports, getOddsUSA } from '@tools/bettingOdds';
 import { currentWeather } from '@tools/weather';
 import { currentLocationTool } from '@tools/currentLocation';
+import { currentDateTime } from '@tools/dateTime';
 import logger from '@utils/logger';
 
 // Map of tool functions
@@ -10,6 +11,7 @@ const toolFunctions: Record<string, Function> = {
   query_duckduckgo: queryDuckDuckGo,
   current_weather: currentWeather,
   current_location: currentLocationTool,
+  current_date_time: currentDateTime,
   // fetchTrackedSports,
   // getOddsUSA,
 };

@@ -5,3 +5,13 @@ what is the current weather in carriacou?
 
 
 I heard Juan Soto signed a massive new deal. What team did he sign with and how much was the deal?
+
+
+The Marlins and Orioles are playing today. Based on recent form, matchup history, and historical averages,
+estimate strikeouts for each starting pitcher. Additionally, identify 1–2 hitters from each team who are most likely to record at least one hit,
+using current batting averages, left/right matchup splits, and performance against the opposing pitcher.
+Include the current runline and moneyline for the game, and based on your overall analysis,
+determine which side of each line—runline and moneyline—offers the most value. Finally, 
+using your projections and reasoning, construct a 3-leg parlay that combines strikeout totals, hitter outcomes,
+and either the runline or moneyline. 
+Clearly explain your reasoning for each leg of the parlay and cite all relevant stats used to support your picks.

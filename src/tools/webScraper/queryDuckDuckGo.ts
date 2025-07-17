@@ -86,23 +86,17 @@ async function fetchDuckDuckGoSearchResults(
   }
 }
 
-// --- Rank results with USE ---
+// --- Rank results with USE (temporarily disabled due to ONNX issues) ---
 async function fetchDuckDuckGoResultsWithRelevance(
   query: string,
 ): Promise<Array<{ title: string; url: string; relevance: number }>> {
   const results = await fetchDuckDuckGoSearchResults(query);
-  const model = await loadUSEModel();
-  const queryEmbedding = (await model.embed([query])).arraySync()[0];
-  const titleEmbeddings = (
-    await model.embed(results.map((r) => r.title))
-  ).arraySync();
-
-  return results
-    .map((result, i) => ({
-      ...result,
-      relevance: cosineSimilarity(queryEmbedding, titleEmbeddings[i]),
-    }))
-    .sort((a, b) => b.relevance - a.relevance);
+  
+  // Temporarily return results without USE ranking to avoid ONNX issues
+  return results.map((result, i) => ({
+    ...result,
+    relevance: 1.0 - (i * 0.1), // Simple decreasing relevance
+  }));
 }
 
 // --- Page content fetch ---

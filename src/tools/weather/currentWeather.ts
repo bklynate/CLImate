@@ -43,15 +43,16 @@ export const currentWeather: ToolFn<Args, string> = async ({
     throw new Error('API key for Tomorrow.io is missing. Please configure it.');
   }
 
-  const url = `https://api.tomorrow.io/v4/weather/realtime?location=${encodeURIComponent(
-    city,
-  )}&apikey=${apiKey}&metrics=imperial`;
+  const url = `https://api.tomorrow.io/v4/weather/realtime?location=${encodeURIComponent(city)}&apikey=${apiKey}&units=imperial`;
 
   try {
     // Fetch weather data
     const response = await fetch(url, {
       method: 'GET',
-      headers: { accept: 'application/json' },
+      headers: { 
+        'accept': 'application/json',
+        'accept-encoding': 'deflate, gzip, br'
+      },
     });
 
     if (!response.ok) {
