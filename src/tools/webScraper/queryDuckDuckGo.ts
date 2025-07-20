@@ -1,4 +1,3 @@
-import '@tensorflow/tfjs-node';
 import type { ToolFn } from 'types';
 import puppeteer from 'puppeteer-extra';
 import randomUseragent from 'random-useragent';
@@ -6,25 +5,13 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { z } from 'zod';
 import { cleanHtml } from './cleanHTML';
 import logger from '@utils/logger';
-import * as use from '@tensorflow-models/universal-sentence-encoder';
+import { SemanticRanker } from './semantic/SemanticRanker';
+import type { SearchResult } from './semantic/types';
 
 puppeteer.use(StealthPlugin());
 
-let useModel: use.UniversalSentenceEncoder | null = null;
-
-const loadUSEModel = async (): Promise<use.UniversalSentenceEncoder> => {
-  if (!useModel) {
-    useModel = await use.load();
-  }
-  return useModel;
-};
-
-const cosineSimilarity = (a: number[], b: number[]): number => {
-  const dot = a.reduce((sum, val, i) => sum + val * b[i], 0);
-  const magA = Math.sqrt(a.reduce((sum, val) => sum + val * val, 0));
-  const magB = Math.sqrt(b.reduce((sum, val) => sum + val * val, 0));
-  return dot / (magA * magB);
-};
+// Initialize semantic ranker
+const semanticRanker = new SemanticRanker();
 
 export const queryDuckDuckGoToolDefinition = {
   name: 'query_duckduckgo',
@@ -86,17 +73,48 @@ async function fetchDuckDuckGoSearchResults(
   }
 }
 
-// --- Rank results with USE (temporarily disabled due to ONNX issues) ---
+// --- Rank results with robust semantic ranking ---
 async function fetchDuckDuckGoResultsWithRelevance(
   query: string,
-): Promise<Array<{ title: string; url: string; relevance: number }>> {
+): Promise<Array<{ title: string; url: string; relevance: number; rankingMethod: string }>> {
   const results = await fetchDuckDuckGoSearchResults(query);
   
-  // Temporarily return results without USE ranking to avoid ONNX issues
-  return results.map((result, i) => ({
-    ...result,
-    relevance: 1.0 - (i * 0.1), // Simple decreasing relevance
+  // Convert to SearchResult format
+  const searchResults: SearchResult[] = results.map(result => ({
+    title: result.title,
+    url: result.url,
+    // Note: DuckDuckGo HTML doesn't provide snippets, but we could extract them from page content
+    snippet: undefined,
+    description: undefined
   }));
+  
+  try {
+    // Use semantic ranking with fallback
+    const rankedResults = await semanticRanker.rankResults(query, searchResults, {
+      useCache: true,
+      fallbackStrategy: 'position',
+      timeout: 30000,
+      weights: {
+        title: 1.0,  // Only title available from DDG HTML
+        snippet: 0.0,
+        description: 0.0
+      }
+    });
+    
+    return rankedResults.map(result => ({
+      title: result.title,
+      url: result.url,
+      relevance: result.relevance,
+      rankingMethod: result.rankingMethod
+    }));
+  } catch (error) {
+    logger.error('Semantic ranking failed completely, using position fallback:', error);
+    return results.map((result, i) => ({
+      ...result,
+      relevance: 1.0 - (i * 0.1),
+      rankingMethod: 'position-fallback'
+    }));
+  }
 }
 
 // --- Page content fetch ---
@@ -136,15 +154,20 @@ export const queryDuckDuckGo: ToolFn<Args, string> = async ({ toolArgs }) => {
 
   const processed = [];
 
+  // Log ranking method used
+  if (searchResults.length > 0) {
+    logger.info(`DuckDuckGo semantic ranking using: ${searchResults[0].rankingMethod}`);
+  }
+
   for (const result of searchResults.slice(0, resultsCount)) {
     try {
       const content = await fetchPageContent(result.url);
-      processed.push(`**${result.title}**\n${content}\n\n`);
+      processed.push(`**${result.title}** (relevance: ${result.relevance.toFixed(3)})\n${content}\n\n`);
     } catch (err) {
-      processed.push(`**${result.title}**\nError fetching content.\n\n`);
+      processed.push(`**${result.title}** (relevance: ${result.relevance.toFixed(3)})\nError fetching content.\n\n`);
     }
   }
 
-  logger.info('DuckDuckGo results processed successfully');
+  logger.info(`DuckDuckGo results processed successfully using ${searchResults[0]?.rankingMethod || 'unknown'} ranking`);
   return processed.join('\n');
 };

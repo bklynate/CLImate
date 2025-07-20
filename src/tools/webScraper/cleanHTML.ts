@@ -8,23 +8,256 @@ import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
 import nlp from 'compromise';
 import natural from 'natural';
+import logger from '@utils/logger';
 
 process.env.ORT_LOG_SEVERITY_LEVEL = '3';
 
-let summarizer: any;
-
-async function getSummarizer() {
-  if (!summarizer) {
-    // Using BART-large-cnn for better quality (confirmed available in Xenova)
-    // Fallback to distilbart if large model fails to load
-    try {
-      summarizer = await pipeline('summarization', 'Xenova/bart-large-cnn');
-    } catch (error) {
-      console.warn('Failed to load BART-large-cnn, falling back to distilbart:', error);
-      summarizer = await pipeline('summarization', 'Xenova/distilbart-cnn-12-6');
+// Natural.js NLP Analysis
+class NaturalNLPAnalyzer {
+  /**
+   * Analyze content quality using Natural.js NLP features
+   */
+  static analyzeContentQuality(text: string): {
+    readabilityScore: number;
+    keywordDensity: number;
+    sentimentScore: number;
+    informativeness: number;
+    overallQuality: number;
+  } {
+    if (!text || text.trim().length < 50) {
+      return { readabilityScore: 0, keywordDensity: 0, sentimentScore: 0, informativeness: 0, overallQuality: 0 };
     }
+
+    // Tokenize and analyze
+    const tokens = natural.WordTokenizer.prototype.tokenize(text.toLowerCase());
+    const sentences = natural.SentenceTokenizer.prototype.tokenize(text);
+    
+    // Calculate readability (Flesch-Kincaid approximation)
+    const avgWordsPerSentence = tokens.length / Math.max(sentences.length, 1);
+    const avgSyllablesPerWord = this.estimateAvgSyllables(tokens);
+    const readabilityScore = Math.max(0, 206.835 - (1.015 * avgWordsPerSentence) - (84.6 * avgSyllablesPerWord));
+    
+    // Keyword density analysis
+    const stemmedTokens = tokens.map(token => natural.PorterStemmer.stem(token));
+    const wordFreq = new Map<string, number>();
+    stemmedTokens.forEach(token => {
+      if (token.length > 3) { // Only meaningful words
+        wordFreq.set(token, (wordFreq.get(token) || 0) + 1);
+      }
+    });
+    
+    // Calculate keyword density (how focused the content is)
+    const totalMeaningfulWords = stemmedTokens.filter(t => t.length > 3).length;
+    const topWords = Array.from(wordFreq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+    
+    const keywordDensity = totalMeaningfulWords > 0 ? 
+      topWords.reduce((sum, [_, freq]) => sum + freq, 0) / totalMeaningfulWords : 0;
+    
+    // Sentiment analysis
+    const sentimentScore = natural.SentimentAnalyzer.getSentiment(
+      stemmedTokens.map(token => ({ word: token, pos: 'N' })) // Simple POS tagging
+    );
+    
+    // Informativeness score based on content markers
+    const informativeWords = ['research', 'study', 'analysis', 'data', 'findings', 'results', 
+                             'according', 'evidence', 'statistics', 'report', 'survey'];
+    const informativeCount = tokens.filter(token => 
+      informativeWords.some(word => natural.PorterStemmer.stem(word) === natural.PorterStemmer.stem(token))
+    ).length;
+    const informativeness = Math.min(1, informativeCount / Math.max(tokens.length * 0.1, 1));
+    
+    // Calculate overall quality score
+    const normalizedReadability = Math.min(1, Math.max(0, readabilityScore / 100));
+    const normalizedSentiment = Math.min(1, Math.max(0, (sentimentScore + 1) / 2)); // Convert -1,1 to 0,1
+    
+    const overallQuality = (
+      normalizedReadability * 0.3 +
+      keywordDensity * 0.2 +
+      normalizedSentiment * 0.2 +
+      informativeness * 0.3
+    );
+    
+    return {
+      readabilityScore: normalizedReadability,
+      keywordDensity,
+      sentimentScore: normalizedSentiment,
+      informativeness,
+      overallQuality
+    };
   }
-  return summarizer;
+  
+  /**
+   * Extract key terms using TF-IDF
+   */
+  static extractKeyTerms(text: string, maxTerms: number = 10): string[] {
+    const tokens = natural.WordTokenizer.prototype.tokenize(text.toLowerCase())
+      .filter(token => token.length > 3 && !/^\d+$/.test(token)); // Filter short words and numbers
+    
+    if (tokens.length === 0) return [];
+    
+    // Simple TF calculation
+    const termFreq = new Map<string, number>();
+    tokens.forEach(token => {
+      const stemmed = natural.PorterStemmer.stem(token);
+      termFreq.set(stemmed, (termFreq.get(stemmed) || 0) + 1);
+    });
+    
+    // Sort by frequency and return top terms
+    return Array.from(termFreq.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, maxTerms)
+      .map(([term, _]) => term);
+  }
+  
+  /**
+   * Calculate content similarity using Jaro-Winkler
+   */
+  static calculateSimilarity(text1: string, text2: string): number {
+    if (!text1 || !text2) return 0;
+    
+    // Normalize texts
+    const normalize = (text: string) => text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    
+    const norm1 = normalize(text1);
+    const norm2 = normalize(text2);
+    
+    if (norm1 === norm2) return 1;
+    if (norm1.length === 0 || norm2.length === 0) return 0;
+    
+    return natural.JaroWinklerDistance(norm1, norm2);
+  }
+  
+  /**
+   * Estimate average syllables per word (approximation)
+   */
+  private static estimateAvgSyllables(tokens: string[]): number {
+    if (tokens.length === 0) return 0;
+    
+    const totalSyllables = tokens.reduce((sum, word) => {
+      // Simple syllable estimation: count vowel groups
+      const vowelGroups = word.match(/[aeiouy]+/gi) || [];
+      const syllables = Math.max(1, vowelGroups.length);
+      return sum + syllables;
+    }, 0);
+    
+    return totalSyllables / tokens.length;
+  }
+}
+
+// Advanced DOM Analysis Types"}
+interface ContentRegion {
+  element: Element;
+  score: number;
+  type: 'main' | 'sidebar' | 'navigation' | 'footer' | 'header' | 'advertisement';
+  textDensity: number;
+  linkDensity: number;
+  hasStructuredData: boolean;
+}
+
+interface StructuredData {
+  type: 'table' | 'list' | 'schema' | 'microdata';
+  data: any;
+  confidence: number;
+}
+
+interface TableData {
+  headers: string[];
+  rows: string[][];
+  caption?: string;
+  summary: string;
+}
+
+// Singleton summarization service with proper memory management
+class SummarizationService {
+  private static instance: SummarizationService | null = null;
+  private summarizer: any = null;
+  private initPromise: Promise<void> | null = null;
+  private modelName: string = '';
+  private readonly TIMEOUT_MS = 30000; // 30 second timeout
+  private readonly MAX_RETRIES = 2;
+
+  static getInstance(): SummarizationService {
+    if (!SummarizationService.instance) {
+      SummarizationService.instance = new SummarizationService();
+    }
+    return SummarizationService.instance;
+  }
+
+  async initialize(): Promise<void> {
+    if (this.summarizer) return;
+    if (this.initPromise) return this.initPromise;
+
+    this.initPromise = this.doInitialize();
+    return this.initPromise;
+  }
+
+  private async doInitialize(): Promise<void> {
+    const models = [
+      'Xenova/distilbart-cnn-6-6', // Faster, smaller model first
+      'Xenova/distilbart-cnn-12-6',
+      'Xenova/bart-large-cnn'
+    ];
+
+    for (const model of models) {
+      try {
+        console.log(`Attempting to load summarization model: ${model}`);
+        this.summarizer = await Promise.race([
+          pipeline('summarization', model),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Model load timeout')), this.TIMEOUT_MS)
+          )
+        ]);
+        this.modelName = model;
+        console.log(`Successfully loaded: ${model}`);
+        return;
+      } catch (error) {
+        console.warn(`Failed to load ${model}:`, error);
+        continue;
+      }
+    }
+    throw new Error('Failed to initialize any summarization model');
+  }
+
+  async summarize(text: string, params: any): Promise<string> {
+    await this.initialize();
+    
+    for (let attempt = 0; attempt < this.MAX_RETRIES; attempt++) {
+      try {
+        const result = await Promise.race([
+          this.summarizer(text, params),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Summarization timeout')), this.TIMEOUT_MS)
+          )
+        ]);
+        return result?.[0]?.summary_text?.trim() || '';
+      } catch (error) {
+        console.warn(`Summarization attempt ${attempt + 1} failed:`, error);
+        if (attempt === this.MAX_RETRIES - 1) throw error;
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
+      }
+    }
+    throw new Error('Summarization failed after all retries');
+  }
+
+  getModelName(): string {
+    return this.modelName;
+  }
+
+  // Cleanup method for proper memory management
+  dispose(): void {
+    this.summarizer = null;
+    this.initPromise = null;
+    SummarizationService.instance = null;
+  }
+}
+
+// Helper function for backward compatibility
+async function getSummarizer() {
+  const service = SummarizationService.getInstance();
+  await service.initialize();
+  return service;
 }
 
 const UNWANTED = [
@@ -55,6 +288,123 @@ const UNWANTED = [
   '[class*="comment"]', '[class*="discuss"]'
 ];
 
+// Advanced DOM Content Analysis
+class ContentAnalyzer {
+  /**
+   * Analyze DOM tree to identify content regions by scoring elements
+   */
+  static analyzeContentRegions(document: Document): ContentRegion[] {
+    const regions: ContentRegion[] = [];
+    const candidates = document.querySelectorAll('div, section, article, main, aside, nav, header, footer');
+    
+    candidates.forEach(element => {
+      const region = this.scoreContentRegion(element as Element);
+      if (region.score > 0.1) { // Only keep potentially relevant regions
+        regions.push(region);
+      }
+    });
+    
+    return regions.sort((a, b) => b.score - a.score);
+  }
+  
+  private static scoreContentRegion(element: Element): ContentRegion {
+    const text = element.textContent || '';
+    const textLength = text.trim().length;
+    const links = element.querySelectorAll('a');
+    const totalLinkText = Array.from(links).reduce((sum, link) => sum + (link.textContent?.length || 0), 0);
+    
+    // Calculate densities
+    const textDensity = textLength / Math.max(element.innerHTML.length, 1);
+    const linkDensity = totalLinkText / Math.max(textLength, 1);
+    
+    // Check for structured data
+    const hasStructuredData = this.hasStructuredContent(element);
+    
+    // Determine region type
+    const type = this.classifyRegionType(element);
+    
+    // Calculate content score
+    let score = 0;
+    
+    // Text length scoring (optimal range: 200-2000 characters)
+    if (textLength >= 200 && textLength <= 2000) {
+      score += 0.4;
+    } else if (textLength > 100) {
+      score += 0.2;
+    }
+    
+    // Text density scoring (higher is better for content)
+    score += textDensity * 0.3;
+    
+    // Link density penalty (too many links = navigation/spam)
+    if (linkDensity < 0.3) {
+      score += 0.2;
+    } else if (linkDensity > 0.7) {
+      score -= 0.3;
+    }
+    
+    // Structured data bonus
+    if (hasStructuredData) {
+      score += 0.2;
+    }
+    
+    // Region type modifiers
+    switch (type) {
+      case 'main':
+        score += 0.3;
+        break;
+      case 'advertisement':
+      case 'navigation':
+        score -= 0.5;
+        break;
+      case 'sidebar':
+        score -= 0.2;
+        break;
+    }
+    
+    return {
+      element,
+      score: Math.max(0, Math.min(1, score)),
+      type,
+      textDensity,
+      linkDensity,
+      hasStructuredData
+    };
+  }
+  
+  private static hasStructuredContent(element: Element): boolean {
+    return element.querySelectorAll('table, ul, ol, dl').length > 0 ||
+           element.querySelector('[itemscope]') !== null ||
+           element.querySelector('script[type="application/ld+json"]') !== null;
+  }
+  
+  private static classifyRegionType(element: Element): ContentRegion['type'] {
+    const tagName = element.tagName.toLowerCase();
+    const className = element.className.toLowerCase();
+    const id = element.id.toLowerCase();
+    
+    // Check semantic HTML5 elements first
+    if (tagName === 'main' || tagName === 'article') return 'main';
+    if (tagName === 'nav') return 'navigation';
+    if (tagName === 'aside') return 'sidebar';
+    if (tagName === 'header') return 'header';
+    if (tagName === 'footer') return 'footer';
+    
+    // Check class names and IDs
+    const adPatterns = /\\b(ad|ads|advertisement|banner|promo|sponsor)\\b/;
+    const navPatterns = /\\b(nav|menu|breadcrumb|pagination)\\b/;
+    const sidebarPatterns = /\\b(sidebar|aside|widget)\\b/;
+    const mainPatterns = /\\b(main|content|article|post|entry)\\b/;
+    
+    if (adPatterns.test(className) || adPatterns.test(id)) return 'advertisement';
+    if (navPatterns.test(className) || navPatterns.test(id)) return 'navigation';
+    if (sidebarPatterns.test(className) || sidebarPatterns.test(id)) return 'sidebar';
+    if (mainPatterns.test(className) || mainPatterns.test(id)) return 'main';
+    
+    return 'main'; // Default assumption
+  }
+}
+
 function removeBoilerplate(node: Element) {
   UNWANTED.forEach((sel) => {
     node.querySelectorAll(sel).forEach((el) => el.remove());
@@ -75,48 +425,215 @@ turndownService.addRule('headingHR', {
   },
 });
 
-turndownService.addRule('preserveTable', {
+// Advanced structured data extraction
+class StructuredDataExtractor {
+  /**
+   * Extract and format table data with preserved structure
+   */
+  static extractTableData(table: Element): TableData | null {
+    const rows = Array.from(table.querySelectorAll('tr'));
+    if (rows.length === 0) return null;
+    
+    // Extract headers
+    const headerCells = rows[0].querySelectorAll('th, td');
+    const headers = Array.from(headerCells).map(cell => 
+      cell.textContent?.trim().replace(/\s+/g, ' ') || ''
+    ).filter(h => h.length > 0);
+    
+    // Extract data rows
+    const dataRows = rows.slice(headers.length > 0 ? 1 : 0).map(row => {
+      const cells = row.querySelectorAll('td, th');
+      return Array.from(cells).map(cell => 
+        cell.textContent?.trim().replace(/\s+/g, ' ') || ''
+      );
+    }).filter(row => row.some(cell => cell.length > 0));
+    
+    // Extract caption if available
+    const caption = table.querySelector('caption')?.textContent?.trim();
+    
+    // Generate summary
+    const summary = this.generateTableSummary(headers, dataRows, caption);
+    
+    return {
+      headers,
+      rows: dataRows,
+      caption,
+      summary
+    };
+  }
+  
+  private static generateTableSummary(headers: string[], rows: string[][], caption?: string): string {
+    if (rows.length === 0) return 'Empty table';
+    
+    const parts = [];
+    
+    if (caption) {
+      parts.push(caption);
+    }
+    
+    if (headers.length > 0) {
+      parts.push(`Columns: ${headers.join(', ')}`);
+    }
+    
+    parts.push(`${rows.length} rows of data`);
+    
+    // Include a sample of the data if it's meaningful
+    if (rows.length > 0 && headers.length > 0 && rows[0].length === headers.length) {
+      const sampleRow = rows[0].slice(0, 3); // First 3 cells
+      if (sampleRow.every(cell => cell.length > 0 && cell.length < 50)) {
+        parts.push(`Sample: ${sampleRow.join(' | ')}`);
+      }
+    }
+    
+    return parts.join('. ');
+  }
+  
+  /**
+   * Extract Schema.org structured data
+   */
+  static extractSchemaData(document: Document): any[] {
+    const schemas = [];
+    
+    // JSON-LD
+    const jsonLdScripts = document.querySelectorAll('script[type="application/ld+json"]');
+    jsonLdScripts.forEach(script => {
+      try {
+        const data = JSON.parse(script.textContent || '');
+        schemas.push({ type: 'json-ld', data });
+      } catch (error) {
+        // Invalid JSON, skip
+      }
+    });
+    
+    // Microdata
+    const microdataElements = document.querySelectorAll('[itemscope]');
+    microdataElements.forEach(element => {
+      const microdata = this.extractMicrodata(element);
+      if (microdata) {
+        schemas.push({ type: 'microdata', data: microdata });
+      }
+    });
+    
+    return schemas;
+  }
+  
+  private static extractMicrodata(element: Element): any {
+    const result: any = {};
+    
+    // Get itemtype
+    const itemtype = element.getAttribute('itemtype');
+    if (itemtype) {
+      result['@type'] = itemtype;
+    }
+    
+    // Get properties
+    const propElements = element.querySelectorAll('[itemprop]');
+    propElements.forEach(propElement => {
+      const propName = propElement.getAttribute('itemprop');
+      if (propName) {
+        const propValue = propElement.getAttribute('content') || 
+                         propElement.textContent?.trim() || '';
+        if (propValue) {
+          result[propName] = propValue;
+        }
+      }
+    });
+    
+    return Object.keys(result).length > 0 ? result : null;
+  }
+}
+
+turndownService.addRule('structuredTable', {
   filter: 'table',
   replacement: (content, node) => {
-    // Extract text content from table instead of converting to JSON
-    const textContent = (node as Element).textContent?.trim() || '';
+    const tableData = StructuredDataExtractor.extractTableData(node as Element);
     
-    // Skip empty tables or tables with minimal content
-    if (textContent.length < 10) {
+    if (!tableData || tableData.rows.length === 0) {
       return '';
     }
     
-    // Limit table content to prevent noise, clean up whitespace
-    const cleanedContent = textContent
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .substring(0, 300); // Limit length
+    // For simple tables with clear structure, preserve as markdown table
+    if (tableData.headers.length > 0 && tableData.headers.length <= 5 && 
+        tableData.rows.length <= 10 && 
+        tableData.headers.every(h => h.length < 30)) {
+      
+      const headerRow = `| ${tableData.headers.join(' | ')} |`;
+      const separatorRow = `| ${tableData.headers.map(() => '---').join(' | ')} |`;
+      const dataRows = tableData.rows.slice(0, 8).map(row => {
+        const paddedRow = [...row];
+        while (paddedRow.length < tableData.headers.length) {
+          paddedRow.push('');
+        }
+        return `| ${paddedRow.slice(0, tableData.headers.length).join(' | ')} |`;
+      });
+      
+      const table = [headerRow, separatorRow, ...dataRows].join('\n');
+      const truncated = tableData.rows.length > 8 ? `\n*[${tableData.rows.length - 8} more rows...]*` : '';
+      
+      return `\n\n${table}${truncated}\n\n`;
+    }
     
-    return `\n\n**Table**: ${cleanedContent}${textContent.length > 300 ? '...' : ''}\n\n`;
+    // For complex tables, use summary format
+    return `\n\n**Table Data**: ${tableData.summary}\n\n`;
   },
 });
 
-turndownService.addRule('cleanLinks', {
+turndownService.addRule('enhancedLinks', {
   filter: 'a',
   replacement: (content, node) => {
     const href = (node as Element).getAttribute('href');
     const text = content.trim();
+    const title = (node as Element).getAttribute('title');
     
     // Skip empty links
     if (!text) return '';
     
-    // Skip if URL is malformed or incomplete
-    if (!href || href.startsWith('javascript:') || href === '#' || href.length < 10) {
+    // Enhanced URL validation
+    const isValidUrl = (url: string): boolean => {
+      if (!url || url.length < 7) return false;
+      if (url.startsWith('javascript:') || url.startsWith('mailto:') || url === '#') return false;
+      if (url.includes('\n') || url.includes(' ') || url.includes('\t')) return false;
+      
+      // Check for incomplete URLs
+      if (url.match(/^https?:\/\/[^\s\/]+$/)) return false;
+      
+      // Check for relative URLs that make sense
+      if (url.startsWith('/') || url.startsWith('./') || url.startsWith('../')) {
+        return url.length > 3 && !url.includes(' ');
+      }
+      
+      // Check for absolute URLs
+      if (url.startsWith('http')) {
+        try {
+          new URL(url);
+          return true;
+        } catch {
+          return false;
+        }
+      }
+      
+      return false;
+    };
+    
+    if (!href || !isValidUrl(href)) {
       return text;
     }
     
-    // Skip if URL looks incomplete (common in scraped content)
-    if (href.match(/^https?:\/\/[^\s\/]+$/) || href.includes('\n') || href.includes(' ')) {
-      return text;
+    // For very long URLs, truncate in display but keep full URL
+    if (href.length > 150) {
+      return text; // Just return text for very long URLs
     }
     
-    // For very long URLs, just return the text to avoid clutter
-    if (href.length > 100) {
-      return text;
+    // If link text is just the URL, make it more readable
+    if (text === href || text.includes(href)) {
+      try {
+        const url = new URL(href.startsWith('http') ? href : `https://${href}`);
+        const domain = url.hostname.replace('www.', '');
+        const cleanText = title || domain;
+        return `[${cleanText}](${href})`;
+      } catch {
+        return text;
+      }
     }
     
     return `[${text}](${href})`;
@@ -338,6 +855,73 @@ async function cleanMarkdownArtifacts(markdown: string): Promise<string> {
   }
 }
 
+// Enhanced content validation and quality assessment
+function validateSummaryQuality(original: string, summary: string): { isValid: boolean; score: number; issues: string[] } {
+  const issues: string[] = [];
+  let score = 100;
+  
+  // Basic validation
+  if (!summary || summary.length < 10) {
+    issues.push('Summary too short');
+    return { isValid: false, score: 0, issues };
+  }
+  
+  // Check for repetition
+  const words = summary.toLowerCase().split(/\s+/);
+  const wordFreq = new Map<string, number>();
+  words.forEach(word => wordFreq.set(word, (wordFreq.get(word) || 0) + 1));
+  
+  const repetitiveWords = Array.from(wordFreq.entries()).filter(([word, count]) => 
+    word.length > 3 && count > Math.max(2, words.length * 0.15)
+  );
+  
+  if (repetitiveWords.length > 0) {
+    score -= 20;
+    issues.push('Contains repetitive content');
+  }
+  
+  // Check semantic coherence (basic)
+  const sentences = summary.split(/[.!?]+/).filter(s => s.trim().length > 5);
+  if (sentences.length === 0) {
+    score -= 30;
+    issues.push('No complete sentences');
+  }
+  
+  // Check for key entity preservation
+  const originalDoc = nlp(original);
+  const summaryDoc = nlp(summary);
+  
+  const originalEntities = [
+    ...originalDoc.people().out('array'),
+    ...originalDoc.places().out('array'),
+    ...originalDoc.organizations().out('array')
+  ].slice(0, 5);
+  
+  const summaryEntities = [
+    ...summaryDoc.people().out('array'),
+    ...summaryDoc.places().out('array'),
+    ...summaryDoc.organizations().out('array')
+  ];
+  
+  const preservedEntities = originalEntities.filter(entity => 
+    summaryEntities.some(se => se.toLowerCase().includes(entity.toLowerCase()))
+  );
+  
+  const entityPreservationRatio = originalEntities.length > 0 ? 
+    preservedEntities.length / originalEntities.length : 1;
+  
+  if (entityPreservationRatio < 0.3 && originalEntities.length > 2) {
+    score -= 25;
+    issues.push('Lost important entities');
+  }
+  
+  return {
+    isValid: score >= 50 && issues.length === 0,
+    score,
+    issues
+  };
+}
+
 function assessContentQuality(text: string): number {
   let score = 50; // Base score
   
@@ -524,146 +1108,104 @@ function intelligentChunk(markdown: string, maxChunkWords = 700): string[] {
   return chunks.filter(chunk => chunk.trim().length > 0);
 }
 
-// STAGE 1: CLASSIFY - Identify content type and characteristics
+// STAGE 1: CLASSIFY - Identify general content characteristics
 interface ContentClassification {
-  domain: 'sports' | 'news' | 'financial' | 'technical' | 'entertainment' | 'general';
-  subtype: string;
-  priority: 'high' | 'medium' | 'low';
-  dataType: 'structured' | 'narrative' | 'mixed';
+  contentType: 'structured' | 'narrative' | 'mixed';
+  informationDensity: 'high' | 'medium' | 'low';
   keyEntities: string[];
-  confidenceScore: number;
+  hasNumericData: boolean;
+  hasListStructure: boolean;
+  readabilityScore: number;
 }
 
 function classifyContent(text: string): ContentClassification {
-  // Use Compromise for smart entity extraction
+  // Use Compromise for entity extraction
   const doc = nlp(text);
   const people = doc.people().out('array');
   const places = doc.places().out('array');
   const organizations = doc.organizations().out('array');
   const numbers = doc.numbers().out('array');
   
-  // Use Natural for token analysis
-  const tokenizer = new natural.WordTokenizer();
-  const tokens = tokenizer.tokenize(text.toLowerCase());
-  const stemmed = tokens.map((token: string) => natural.PorterStemmer.stem(token));
+  // Use Natural.js for enhanced analysis
+  const naturalAnalysis = NaturalNLPAnalyzer.analyzeContentQuality(text);
+  const keyTerms = NaturalNLPAnalyzer.extractKeyTerms(text, 8);
   
-  // Enhanced domain detection using both libraries
-  const sportsTerms = ['game', 'team', 'player', 'score', 'season', 'coach', 'championship', 'league', 'stadium', 'playoff'];
-  const financialTerms = ['stock', 'market', 'price', 'earnings', 'revenue', 'profit', 'investment', 'trading', 'dollar'];
-  const newsTerms = ['breaking', 'report', 'announced', 'statement', 'official', 'according', 'source', 'investigate'];
-  const techTerms = ['software', 'technology', 'app', 'system', 'platform', 'digital', 'algorithm', 'data', 'api'];
-  
-  // Score domains using stemmed tokens for better matching
-  const domainScores = {
-    sports: sportsTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
-    financial: financialTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
-    news: newsTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
-    technical: techTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length
-  };
-  
-  const maxScore = Math.max(...Object.values(domainScores));
-  const domain = maxScore > 1 ? 
-    (Object.entries(domainScores).find(([_, score]) => score === maxScore)?.[0] as ContentClassification['domain']) || 'general' 
-    : 'general';
-  
-  // Smart subtype detection using Compromise
-  let subtype = 'standard';
-  if (domain === 'sports') {
-    if (doc.has('betting') || doc.has('odds')) subtype = 'betting';
-    else if (doc.has('statistics') || doc.has('analytics')) subtype = 'statistics';
-    else if (doc.has('trade') || doc.has('roster')) subtype = 'transactions';
-  } else if (domain === 'financial') {
-    if (doc.has('earnings') || doc.has('quarterly')) subtype = 'earnings';
-    else if (doc.has('merger') || doc.has('acquisition')) subtype = 'corporate';
-  }
-  
-  // Enhanced data structure detection
-  const hasNumbers = numbers.length > 0 || doc.numbers().out('array').length > 0;
+  // Detect content structure patterns
+  const hasNumbers = numbers.length > 0;
   const hasList = doc.match('#List').length > 2;
   const hasTable = /\*\*Table\*\*/.test(text);
+  const hasListStructure = (text.match(/^[-*+]\s/gm) || []).length > 3;
   
-  let dataType: ContentClassification['dataType'] = 'narrative';
-  if (hasNumbers && (hasList || hasTable)) dataType = 'structured';
-  else if (hasNumbers || hasList) dataType = 'mixed';
+  // Determine content type based on structure
+  let contentType: ContentClassification['contentType'] = 'narrative';
+  if (hasNumbers && (hasList || hasTable || hasListStructure)) {
+    contentType = 'structured';
+  } else if (hasNumbers || hasList || hasListStructure) {
+    contentType = 'mixed';
+  }
   
-  // Combine entities from both libraries
-  const allEntities = [...new Set([...people, ...places, ...organizations])];
-  const keyEntities = allEntities.slice(0, 6);
+  // Calculate information density
+  const wordCount = text.split(/\s+/).length;
+  const entityCount = people.length + places.length + organizations.length;
+  const numberCount = numbers.length;
+  const uniqueWords = new Set(text.toLowerCase().split(/\s+/)).size;
+  const vocabularyRatio = uniqueWords / wordCount;
   
-  // Enhanced confidence calculation
-  const entityBonus = keyEntities.length * 5;
-  const numberBonus = numbers.length > 0 ? 10 : 0;
-  const confidenceScore = Math.min(100, (maxScore * 20) + entityBonus + numberBonus + 30);
+  // Enhanced information density using Natural.js analysis
+  let densityScore = naturalAnalysis.informativeness * 20; // Base score from Natural.js
+  if (entityCount > 0) densityScore += entityCount * 2;
+  if (numberCount > 0) densityScore += numberCount;
+  if (vocabularyRatio > 0.6) densityScore += 10;
+  if (hasTable || hasListStructure) densityScore += 5;
+  if (naturalAnalysis.keywordDensity > 0.3) densityScore += 8;
+  
+  const informationDensity: ContentClassification['informationDensity'] = 
+    densityScore >= 20 ? 'high' : densityScore >= 10 ? 'medium' : 'low';
+  
+  // Combine all entities with Natural.js key terms
+  const allEntities = [...new Set([...people, ...places, ...organizations, ...keyTerms])];
+  const keyEntities = allEntities.slice(0, 12); // Increased to capture more context including key terms
   
   return {
-    domain,
-    subtype,
-    priority: maxScore >= 3 ? 'high' : maxScore >= 1 ? 'medium' : 'low',
-    dataType,
+    contentType,
+    informationDensity,
     keyEntities,
-    confidenceScore
+    hasNumericData: hasNumbers,
+    hasListStructure,
+    readabilityScore: naturalAnalysis.readabilityScore
   };
 }
 
-// STAGE 2: EXTRACT - Enhanced domain-specific information extraction using Natural + Compromise
-function extractDomainSpecificInfo(text: string, classification: ContentClassification): string[] {
+// STAGE 2: EXTRACT - General information extraction using Natural + Compromise
+function extractKeyInformation(text: string, classification: ContentClassification): string[] {
   const doc = nlp(text);
   const extracted: string[] = [];
   
-  switch (classification.domain) {
-    case 'sports':
-      // Use Compromise for smart extraction
-      const scores = doc.match('#Value [dash] #Value').out('array'); // Scores like "3-2"
-      const stats = doc.numbers().out('array').slice(0, 5); // Numbers in context
-      const people = doc.people().out('array').slice(0, 4); // Player names
-      const organizations = doc.organizations().out('array').slice(0, 3); // Team names
-      
-      extracted.push(...scores.slice(0, 3));
-      extracted.push(...stats);
-      extracted.push(...people);
-      extracted.push(...organizations);
-      break;
-      
-    case 'financial':
-      // Enhanced financial extraction
-      const money = doc.money().out('array').slice(0, 4); // $1.2B, $500M etc
-      const percentages = doc.percentages().out('array').slice(0, 4); // 15%, +3.2%
-      const companies = doc.organizations().out('array').slice(0, 3);
-      const numbers = doc.numbers().out('array').slice(0, 3); // General numeric values
-      
-      extracted.push(...money);
-      extracted.push(...percentages);
-      extracted.push(...companies);
-      extracted.push(...numbers);
-      break;
-      
-    case 'news':
-      // Smart news extraction
-      const quotes = doc.quotations().out('array').slice(0, 2);
-      const newsPersons = doc.people().out('array').slice(0, 3);
-      const places = doc.places().out('array').slice(0, 3);
-      const topics = doc.topics().out('array').slice(0, 2); // Main topics
-      
-      extracted.push(...quotes);
-      extracted.push(...newsPersons);
-      extracted.push(...places);
-      extracted.push(...topics);
-      break;
-      
-    default:
-      // General intelligent extraction
-      const allNumbers = doc.numbers().out('array').slice(0, 4);
-      const allPeople = doc.people().out('array').slice(0, 3);
-      const allPlaces = doc.places().out('array').slice(0, 3);
-      const dates = doc.match('#Date').out('array').slice(0, 2);
-      
-      extracted.push(...allNumbers);
-      extracted.push(...allPeople);
-      extracted.push(...allPlaces);
-      extracted.push(...dates);
-  }
+  // Extract universal content elements
+  const numbers = doc.numbers().out('array').slice(0, 6);
+  const people = doc.people().out('array').slice(0, 5);
+  const places = doc.places().out('array').slice(0, 5);
+  const organizations = doc.organizations().out('array').slice(0, 5);
+  const dates = doc.match('#Date').out('array').slice(0, 3);
+  const money = doc.money().out('array').slice(0, 4);
+  const percentages = doc.percentages().out('array').slice(0, 4);
+  const quotations = doc.quotations().out('array').slice(0, 2);
   
-  return extracted.filter(item => item && item.length > 0);
+  // Add all extracted information
+  extracted.push(...numbers);
+  extracted.push(...people);
+  extracted.push(...places);
+  extracted.push(...organizations);
+  extracted.push(...dates);
+  extracted.push(...money);
+  extracted.push(...percentages);
+  extracted.push(...quotations);
+  
+  // Extract key phrases (noun phrases that might be important)
+  const nounPhrases = doc.match('#Noun+ #Noun').out('array').slice(0, 5);
+  extracted.push(...nounPhrases);
+  
+  return extracted.filter(item => item && item.length > 0 && item.length > 2);
 }
 
 // Post-process summary to make it more concise
@@ -690,23 +1232,25 @@ function postProcessSummary(summary: string, classification?: ContentClassificat
     processed = processed.replace(pattern, '');
   });
   
-  // Convert passive voice to active when possible
+  // Convert passive voice to active when possible (generalized)
   processed = processed
-    .replace(/\bwas (scored|achieved|completed|announced)\b/gi, '$1')
-    .replace(/\bwere (awarded|given|presented)\b/gi, 'received')
+    .replace(/\bwas (created|developed|built|designed|implemented|established|completed|announced)\b/gi, '$1')
+    .replace(/\bwere (developed|created|built|designed|implemented|awarded|given|presented)\b/gi, '$1')
     .replace(/\bis expected to\b/gi, 'will')
-    .replace(/\bwill be able to\b/gi, 'can');
+    .replace(/\bwill be able to\b/gi, 'can')
+    .replace(/\bis being\b/gi, 'is')
+    .replace(/\bare being\b/gi, 'are');
   
-  // Compress common phrases
+  // Compress common phrases (generalized)
   processed = processed
     .replace(/\bmore than\b/gi, '>')
     .replace(/\bless than\b/gi, '<')
     .replace(/\bapproximately\b/gi, '~')
     .replace(/\babout\b/gi, '~')
-    .replace(/\bdollars?\b/gi, '$')
     .replace(/\bpercent\b/gi, '%')
     .replace(/\bmillion\b/gi, 'M')
-    .replace(/\bbillion\b/gi, 'B');
+    .replace(/\bbillion\b/gi, 'B')
+    .replace(/\bthousand\b/gi, 'K');
   
   // Clean up extra whitespace and punctuation
   processed = processed
@@ -720,15 +1264,24 @@ function postProcessSummary(summary: string, classification?: ContentClassificat
   return processed;
 }
 
-// STAGE 4: COMPRESS - Intelligent multi-stage summarization with domain awareness
+// STAGE 4: COMPRESS - Intelligent multi-stage summarization with content-aware optimization
 async function intelligentSummarization(text: string, targetLength: number, classification: ContentClassification): Promise<string> {
-  const summarizerPipeline = await getSummarizer();
+  // Input validation
+  if (!text || text.trim().length < 50) {
+    throw new Error('Input text too short for summarization');
+  }
+  
+  if (targetLength < 10 || targetLength > 1000) {
+    throw new Error('Invalid target length for summarization');
+  }
+  
+  const summarizerService = await getSummarizer();
   
   try {
-    // Extract domain-specific information first
-    const keyInfo = extractDomainSpecificInfo(text, classification);
+    // Extract key information from content
+    const keyInfo = extractKeyInformation(text, classification);
     
-    // Determine compression strategy based on classification
+    // Determine compression strategy based on content characteristics
     let strategy = {
       firstPassRatio: 1.8,
       compressionLevel: 'moderate' as 'aggressive' | 'moderate' | 'gentle',
@@ -736,15 +1289,15 @@ async function intelligentSummarization(text: string, targetLength: number, clas
       maxIterations: 2
     };
     
-    // Adapt strategy based on domain and data type
-    if (classification.domain === 'sports' && classification.subtype === 'betting') {
-      strategy = { firstPassRatio: 1.4, compressionLevel: 'aggressive', preserveStructure: true, maxIterations: 3 };
-    } else if (classification.domain === 'financial') {
+    // Adapt strategy based on content type and information density
+    if (classification.contentType === 'structured' && classification.informationDensity === 'high') {
       strategy = { firstPassRatio: 1.6, compressionLevel: 'gentle', preserveStructure: true, maxIterations: 2 };
-    } else if (classification.dataType === 'structured') {
+    } else if (classification.contentType === 'structured') {
       strategy = { firstPassRatio: 1.5, compressionLevel: 'moderate', preserveStructure: true, maxIterations: 2 };
-    } else if (classification.priority === 'low') {
+    } else if (classification.informationDensity === 'low') {
       strategy = { firstPassRatio: 1.2, compressionLevel: 'aggressive', preserveStructure: false, maxIterations: 1 };
+    } else if (classification.informationDensity === 'high') {
+      strategy = { firstPassRatio: 1.9, compressionLevel: 'gentle', preserveStructure: false, maxIterations: 2 };
     }
     
     // Stage 1: Domain-aware initial summarization
@@ -752,19 +1305,32 @@ async function intelligentSummarization(text: string, targetLength: number, clas
       max_length: Math.floor(targetLength * strategy.firstPassRatio),
       min_length: Math.floor(targetLength * 1.1),
       no_repeat_ngram_size: strategy.compressionLevel === 'aggressive' ? 4 : 3,
-      do_sample: classification.dataType === 'narrative',
+      do_sample: classification.contentType === 'narrative',
       early_stopping: true,
     };
     
-    const firstPass = await summarizerPipeline(text, firstPassParams);
-    let firstSummary = firstPass?.[0]?.summary_text?.trim();
+    const firstSummary = await summarizerService.summarize(text, firstPassParams);
     
-    if (!firstSummary || firstSummary.length < 50) {
-      // Intelligent fallback: create domain-specific summary from extracted info
+    // Validate first summary
+    const firstValidation = validateSummaryQuality(text, firstSummary);
+    if (!firstValidation.isValid) {
+      console.warn('First pass summary validation failed:', firstValidation.issues);
+      
+      // Intelligent fallback: create general summary from extracted info
       if (keyInfo.length > 0) {
-        const fallbackSummary = createDomainSpecificFallback(keyInfo, classification);
-        return fallbackSummary;
+        const fallbackSummary = createGeneralFallback(keyInfo, classification);
+        const fallbackValidation = validateSummaryQuality(text, fallbackSummary);
+        if (fallbackValidation.isValid) {
+          return fallbackSummary;
+        }
       }
+      
+      // Ultimate fallback: extractive summary using Natural
+      const extractiveSummary = naturalExtractiveSummary(text, Math.ceil(targetLength / 20));
+      if (extractiveSummary.length > 30) {
+        return extractiveSummary;
+      }
+      
       return text.substring(0, targetLength * 8) + (text.length > targetLength * 8 ? '...' : '');
     }
     
@@ -786,11 +1352,18 @@ async function intelligentSummarization(text: string, targetLength: number, clas
       early_stopping: true,
     };
     
-    const secondPass = await summarizerPipeline(firstSummary, secondPassParams);
-    let finalSummary = secondPass?.[0]?.summary_text?.trim();
+    let finalSummary = await summarizerService.summarize(firstSummary, secondPassParams);
     
     if (finalSummary) {
       finalSummary = postProcessSummary(finalSummary, classification);
+      
+      // Validate final summary
+      const finalValidation = validateSummaryQuality(text, finalSummary);
+      if (!finalValidation.isValid) {
+        console.warn('Final summary validation failed:', finalValidation.issues);
+        // Fall back to first summary if final is invalid
+        return postProcessSummary(firstSummary, classification);
+      }
       
       // Stage 3: Final optimization if still too long and strategy allows
       if (strategy.maxIterations === 3 && finalSummary.split(/\s+/).length > targetLength * 1.2) {
@@ -802,11 +1375,15 @@ async function intelligentSummarization(text: string, targetLength: number, clas
           early_stopping: true,
         };
         
-        const finalPass = await summarizerPipeline(finalSummary, finalPassParams);
-        const ultraCompressed = finalPass?.[0]?.summary_text?.trim();
+        const ultraCompressed = await summarizerService.summarize(finalSummary, finalPassParams);
         
         if (ultraCompressed && ultraCompressed.length > 30) {
-          return postProcessSummary(ultraCompressed, classification);
+          const ultraValidation = validateSummaryQuality(text, ultraCompressed);
+          if (ultraValidation.isValid) {
+            return postProcessSummary(ultraCompressed, classification);
+          } else {
+            console.warn('Ultra-compressed summary validation failed, keeping previous version');
+          }
         }
       }
     }
@@ -821,26 +1398,29 @@ async function intelligentSummarization(text: string, targetLength: number, clas
       return naturalSummary;
     }
     
-    // Ultimate fallback: domain-specific key info
-    const keyInfo = extractDomainSpecificInfo(text, classification);
+    // Ultimate fallback: general key info
+    const keyInfo = extractKeyInformation(text, classification);
     if (keyInfo.length > 0) {
-      return createDomainSpecificFallback(keyInfo, classification);
+      return createGeneralFallback(keyInfo, classification);
     }
     return text.substring(0, targetLength * 8) + (text.length > targetLength * 8 ? '...' : '');
   }
 }
 
 // Enhanced intelligent fallback using Natural's extractive summarization
-function createDomainSpecificFallback(keyInfo: string[], classification: ContentClassification): string {
-  switch (classification.domain) {
-    case 'sports':
-      return `${classification.keyEntities.slice(0, 2).join(' vs ')}: ${keyInfo.slice(0, 4).join(', ')}.`;
-    case 'financial':
-      return `${classification.keyEntities[0] || 'Market'}: ${keyInfo.slice(0, 5).join(', ')}.`;
-    case 'news':
-      return `Breaking: ${keyInfo.slice(0, 4).join('; ')}.`;
-    default:
-      return keyInfo.slice(0, 6).join('; ') + '.';
+function createGeneralFallback(keyInfo: string[], classification: ContentClassification): string {
+  if (keyInfo.length === 0) {
+    return 'Content summary unavailable.';
+  }
+  
+  // Create a general summary based on extracted information
+  const entities = classification.keyEntities.slice(0, 3);
+  const keyPoints = keyInfo.slice(0, 6);
+  
+  if (entities.length > 0) {
+    return `Key topics: ${entities.join(', ')}. Summary: ${keyPoints.join('; ')}.`;
+  } else {
+    return `Summary: ${keyPoints.join('; ')}.`;
   }
 }
 
@@ -899,7 +1479,42 @@ async function summarizeMarkdown(markdown: string, maxChunkWords = 700): Promise
   }
   
   // Use intelligent chunking with adaptive sizing
-  const sections = intelligentChunk(markdown, adaptiveChunkSize);
+  const rawSections = intelligentChunk(markdown, adaptiveChunkSize);
+  
+  // DEDUPLICATION: Remove similar sections using Natural.js similarity scoring
+  const sections: string[] = [];
+  const SIMILARITY_THRESHOLD = 0.85; // 85% similarity threshold
+  
+  for (const currentSection of rawSections) {
+    const trimmedCurrent = currentSection.trim();
+    if (!trimmedCurrent || trimmedCurrent.length < 50) continue;
+    
+    // Check similarity against already added sections
+    let isDuplicate = false;
+    for (const existingSection of sections) {
+      const similarity = NaturalNLPAnalyzer.calculateSimilarity(trimmedCurrent, existingSection);
+      if (similarity > SIMILARITY_THRESHOLD) {
+        // Keep the longer/higher quality version
+        const currentQuality = assessContentQuality(trimmedCurrent);
+        const existingQuality = assessContentQuality(existingSection);
+        
+        if (currentQuality > existingQuality || 
+           (currentQuality === existingQuality && trimmedCurrent.length > existingSection.length)) {
+          // Replace existing with current (better quality/longer)
+          const index = sections.indexOf(existingSection);
+          sections[index] = trimmedCurrent;
+        }
+        isDuplicate = true;
+        break;
+      }
+    }
+    
+    if (!isDuplicate) {
+      sections.push(trimmedCurrent);
+    }
+  }
+  
+  logger.info(`Deduplication: ${rawSections.length} sections → ${sections.length} sections (removed ${rawSections.length - sections.length} duplicates)`);
   const summaries: string[] = [];
 
   for (const section of sections) {
@@ -963,10 +1578,66 @@ async function summarizeMarkdown(markdown: string, maxChunkWords = 700): Promise
 }
 
 export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
+  let dom: JSDOM | null = null;
+  let bodyDom: JSDOM | null = null;
+  
   try {
-    const dom = new JSDOM(rawHtml, { url });
+    // Input validation
+    if (!rawHtml || rawHtml.trim().length < 100) {
+      throw new Error('HTML content too short or empty');
+    }
+    
+    if (rawHtml.length > 10_000_000) { // 10MB limit
+      throw new Error('HTML content too large for processing');
+    }
+    
+    dom = new JSDOM(rawHtml, { url });
+    
+    // PHASE 1: Extract structured data before processing
+    const structuredData = StructuredDataExtractor.extractSchemaData(dom.window.document);
+    if (structuredData.length > 0) {
+      logger.info(`Extracted ${structuredData.length} structured data items from ${url}`);
+    }
+    
+    // PHASE 2: Advanced content region analysis
+    const contentRegions = ContentAnalyzer.analyzeContentRegions(dom.window.document);
+    logger.info(`Identified ${contentRegions.length} content regions, top score: ${contentRegions[0]?.score.toFixed(3) || 'none'}`);
+    
+    // PHASE 3: Use Readability with fallback to content regions
     const reader = new Readability(dom.window.document, { charThreshold: 500 });
-    const article = reader.parse();
+    let article = reader.parse();
+
+    // If Readability fails, use our content region analysis with sentiment filtering
+    if (!article?.content && contentRegions.length > 0) {
+      // Filter regions by sentiment quality
+      const qualityRegions = contentRegions.filter(region => {
+        const text = region.element.textContent || '';
+        if (text.length < 100) return false; // Skip very short content
+        
+        const sentimentAnalysis = NaturalNLPAnalyzer.analyzeContentQuality(text);
+        // Filter out extremely negative or low-quality content
+        return sentimentAnalysis.overallQuality > 0.3 && sentimentAnalysis.sentimentScore > 0.2;
+      });
+      
+      const candidateRegions = qualityRegions.length > 0 ? qualityRegions : contentRegions;
+      const bestRegion = candidateRegions.find(r => r.type === 'main' && r.score > 0.3) || candidateRegions[0];
+      
+      if (bestRegion && bestRegion.score > 0.2) {
+        const sentimentInfo = NaturalNLPAnalyzer.analyzeContentQuality(bestRegion.element.textContent || '');
+        logger.info(`Readability failed, using content region analysis (score: ${bestRegion.score.toFixed(3)}, quality: ${sentimentInfo.overallQuality.toFixed(3)})`);
+        article = {
+          title: dom.window.document.title || '',
+          content: bestRegion.element.innerHTML,
+          textContent: bestRegion.element.textContent || '',
+          length: bestRegion.element.textContent?.length || 0,
+          excerpt: '',
+          byline: '',
+          dir: '',
+          siteName: '',
+          lang: ''
+        };
+      }
+    }
 
     if (!article?.content) {
       await addMessages([
@@ -979,23 +1650,82 @@ export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
     }
 
     // Remove junk inside article body
-    const bodyDom = new JSDOM(article.content, { url });
+    bodyDom = new JSDOM(article.content, { url });
     const body = bodyDom.window.document.body;
     removeBoilerplate(body);
 
-    // Convert to Markdown
+    // PHASE 5: Convert to Markdown with enhanced processing
     let markdown = turndownService.turndown(body.innerHTML);
+    
+    // Add structured data as context if available
+    if (structuredData.length > 0) {
+      const structuredContext = structuredData.map(item => {
+        if (item.type === 'json-ld' && item.data.name) {
+          return `**${item.data.name}**: ${item.data.description || 'Structured data available'}`;
+        } else if (item.type === 'microdata' && item.data['@type']) {
+          return `**${item.data['@type']}**: Structured content`;
+        }
+        return null;
+      }).filter(Boolean).slice(0, 3); // Limit to 3 items
+      
+      if (structuredContext.length > 0) {
+        markdown = `*Structured Data: ${structuredContext.join(', ')}*\n\n---\n\n${markdown}`;
+      }
+    }
+    
     markdown = dedupeContent(prettyWhitespace(markdown));
+
+    // Validate markdown before processing
+    if (!markdown || markdown.trim().length < 50) {
+      console.warn(`Insufficient content extracted from ${url}`);
+      return 'Content too short after cleaning.';
+    }
 
     // Clean up markdown conversion artifacts using remark
     markdown = await cleanMarkdownArtifacts(markdown);
 
-    // Summarize if oversized
-    const cleaned = await summarizeMarkdown(markdown);
+    // Summarize if oversized with timeout protection
+    const cleaned = await Promise.race([
+      summarizeMarkdown(markdown),
+      new Promise<string>((_, reject) => 
+        setTimeout(() => reject(new Error('Summarization timeout')), 120000) // 2 min timeout
+      )
+    ]);
 
     return cleaned;
+    
   } catch (error: any) {
     console.error(`Failed to clean HTML from ${url}:`, error?.message || error);
-    throw new Error(`Error cleaning HTML from ${url}`);
+    
+    // Provide more specific error messages
+    if (error.message?.includes('timeout')) {
+      throw new Error(`Timeout while processing content from ${url}`);
+    } else if (error.message?.includes('too large')) {
+      throw new Error(`Content from ${url} is too large to process`);
+    } else {
+      throw new Error(`Error cleaning HTML from ${url}: ${error.message || 'Unknown error'}`);
+    }
+  } finally {
+    // Explicit cleanup to prevent memory leaks
+    try {
+      if (bodyDom?.window) {
+        bodyDom.window.close();
+      }
+      if (dom?.window) {
+        dom.window.close();
+      }
+    } catch (cleanupError) {
+      console.warn('Cleanup warning:', cleanupError);
+    }
+  }
+}
+
+// Export cleanup function for manual memory management
+export function cleanupSummarizationService(): void {
+  try {
+    const service = SummarizationService.getInstance();
+    service.dispose();
+  } catch (error) {
+    console.warn('Error during summarization service cleanup:', error);
   }
 }
