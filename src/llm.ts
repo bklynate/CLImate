@@ -5,14 +5,16 @@ import { getLocalAIByProvider } from '@src/ai';
 import { systemPrompt } from '@src/systemPrompt';
 
 const models = [
-  'llama4:scout',
+  'llama4:16x17b',
+  'deepseek-r1:70b',
   'qwen3:32b',
+  'llama3.3:70b',
 ];
 
 export const runLLM = async ({
-  model = models[0],
+  model = models[3],
   messages,
-  temperature = 0.1,
+  temperature = 0.8,
   tools = [],
 }: {
   model?: string;
@@ -22,7 +24,7 @@ export const runLLM = async ({
 }) => {
   const formattedTools = tools?.map((tool) => zodFunction(tool));
 
-  const response = await getLocalAIByProvider().chat.completions.create({
+  const response = await getLocalAIByProvider('ollama').chat.completions.create({
     model,
     temperature,
     messages: [

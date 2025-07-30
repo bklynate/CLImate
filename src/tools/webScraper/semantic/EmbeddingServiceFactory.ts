@@ -1,6 +1,7 @@
 import { EmbeddingService } from './EmbeddingService';
 import { UniversalSentenceEncoderBackend } from './UniversalSentenceEncoderBackend';
 import { FallbackStaticBackend } from './FallbackStaticBackend';
+import { LMStudioEmbeddingBackend } from './LMStudioEmbeddingBackend';
 import type { EmbeddingBackendConfig, EmbeddingBackendType } from './types';
 import logger from '@utils/logger';
 
@@ -40,6 +41,18 @@ export class EmbeddingServiceFactory {
     // Define backend configurations in priority order
     const backendConfigs: EmbeddingBackendConfig[] = [
       {
+        name: 'lm-studio',
+        enabled: true,
+        priority: 150,
+        config: {
+          baseURL: process.env.LM_STUDIO_BASE_URL || 'http://localhost:1234/v1',
+          apiKey: process.env.LM_STUDIO_API_KEY || 'lm-studio',
+          model: process.env.LM_STUDIO_EMBEDDING_MODEL || 'nomic-ai/nomic-embed-text-v1.5-GGUF',
+          timeout: 30000,
+          maxRetries: 3
+        }
+      },
+      {
         name: 'universal-sentence-encoder',
         enabled: true,
         priority: 100,
@@ -75,6 +88,8 @@ export class EmbeddingServiceFactory {
    */
   private createBackend(config: EmbeddingBackendConfig): EmbeddingService {
     switch (config.name) {
+      case 'lm-studio':
+        return new LMStudioEmbeddingBackend(config);
       case 'universal-sentence-encoder':
         return new UniversalSentenceEncoderBackend(config);
       case 'fallback-static':

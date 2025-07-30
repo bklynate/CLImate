@@ -47,4 +47,4 @@ export interface EmbeddingBackendConfig {
   config: Record<string, any>;
 }
 
-export type EmbeddingBackendType = 'use' | 'openai' | 'local' | 'fallback';
+export type EmbeddingBackendType = 'use' | 'openai' | 'local' | 'lm-studio' | 'fallback';

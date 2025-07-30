@@ -28,9 +28,11 @@ class NaturalNLPAnalyzer {
       return { readabilityScore: 0, keywordDensity: 0, sentimentScore: 0, informativeness: 0, overallQuality: 0 };
     }
 
-    // Tokenize and analyze
-    const tokens = natural.WordTokenizer.prototype.tokenize(text.toLowerCase());
-    const sentences = natural.SentenceTokenizer.prototype.tokenize(text);
+    try {
+
+    // Tokenize and analyze with safety checks
+    const tokens = natural.WordTokenizer.prototype.tokenize(text.toLowerCase()) || [];
+    const sentences = natural.SentenceTokenizer.prototype.tokenize(text) || [];
     
     // Calculate readability (Flesch-Kincaid approximation)
     const avgWordsPerSentence = tokens.length / Math.max(sentences.length, 1);
@@ -55,10 +57,24 @@ class NaturalNLPAnalyzer {
     const keywordDensity = totalMeaningfulWords > 0 ? 
       topWords.reduce((sum, [_, freq]) => sum + freq, 0) / totalMeaningfulWords : 0;
     
-    // Sentiment analysis
-    const sentimentScore = natural.SentimentAnalyzer.getSentiment(
-      stemmedTokens.map(token => ({ word: token, pos: 'N' })) // Simple POS tagging
-    );
+    // Sentiment analysis (using a simpler approach due to API complexity)
+    let sentimentScore = 0;
+    try {
+      // Use a basic sentiment approach instead of the complex SentimentAnalyzer
+      const positiveWords = ['good', 'great', 'excellent', 'amazing', 'wonderful', 'fantastic', 'best', 'love', 'perfect', 'outstanding'];
+      const negativeWords = ['bad', 'terrible', 'awful', 'horrible', 'worst', 'hate', 'disappointing', 'poor', 'failed', 'broken'];
+      
+      const positiveCount = stemmedTokens.filter(token => positiveWords.includes(token)).length;
+      const negativeCount = stemmedTokens.filter(token => negativeWords.includes(token)).length;
+      
+      if (stemmedTokens.length > 0) {
+        sentimentScore = (positiveCount - negativeCount) / stemmedTokens.length;
+        sentimentScore = Math.max(-1, Math.min(1, sentimentScore)); // Normalize to -1,1 range
+      }
+    } catch (error) {
+      logger.warn('Sentiment analysis failed, using neutral score:', error);
+      sentimentScore = 0;
+    }
     
     // Informativeness score based on content markers
     const informativeWords = ['research', 'study', 'analysis', 'data', 'findings', 'results', 
@@ -86,16 +102,22 @@ class NaturalNLPAnalyzer {
       informativeness,
       overallQuality
     };
+    
+    } catch (error) {
+      logger.warn('Content quality analysis failed:', error);
+      return { readabilityScore: 0, keywordDensity: 0, sentimentScore: 0, informativeness: 0, overallQuality: 0 };
+    }
   }
   
   /**
    * Extract key terms using TF-IDF
    */
   static extractKeyTerms(text: string, maxTerms: number = 10): string[] {
-    const tokens = natural.WordTokenizer.prototype.tokenize(text.toLowerCase())
-      .filter(token => token.length > 3 && !/^\d+$/.test(token)); // Filter short words and numbers
-    
-    if (tokens.length === 0) return [];
+    try {
+      const tokens = (natural.WordTokenizer.prototype.tokenize(text.toLowerCase()) || [])
+        .filter(token => token.length > 3 && !/^\d+$/.test(token)); // Filter short words and numbers
+      
+      if (tokens.length === 0) return [];
     
     // Simple TF calculation
     const termFreq = new Map<string, number>();
@@ -109,24 +131,34 @@ class NaturalNLPAnalyzer {
       .sort((a, b) => b[1] - a[1])
       .slice(0, maxTerms)
       .map(([term, _]) => term);
+      
+    } catch (error) {
+      logger.warn('Key terms extraction failed:', error);
+      return [];
+    }
   }
   
   /**
    * Calculate content similarity using Jaro-Winkler
    */
   static calculateSimilarity(text1: string, text2: string): number {
-    if (!text1 || !text2) return 0;
-    
-    // Normalize texts
-    const normalize = (text: string) => text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    
-    const norm1 = normalize(text1);
-    const norm2 = normalize(text2);
-    
-    if (norm1 === norm2) return 1;
-    if (norm1.length === 0 || norm2.length === 0) return 0;
-    
-    return natural.JaroWinklerDistance(norm1, norm2);
+    try {
+      if (!text1 || !text2) return 0;
+      
+      // Normalize texts
+      const normalize = (text: string) => text.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+      
+      const norm1 = normalize(text1);
+      const norm2 = normalize(text2);
+      
+      if (norm1 === norm2) return 1;
+      if (norm1.length === 0 || norm2.length === 0) return 0;
+      
+      return natural.JaroWinklerDistance(norm1, norm2);
+    } catch (error) {
+      logger.warn('Similarity calculation failed:', error);
+      return 0;
+    }
   }
   
   /**
@@ -1005,6 +1037,12 @@ function assessContentQuality(text: string): number {
 }
 
 function intelligentChunk(markdown: string, maxChunkWords = 700): string[] {
+  // Safety check for undefined/null markdown
+  if (!markdown || typeof markdown !== 'string') {
+    logger.warn('intelligentChunk received invalid markdown:', markdown);
+    return [];
+  }
+  
   // First split by explicit separators (headers with ---) 
   const majorSections = markdown.split(/\n---\n/);
   const chunks: string[] = [];
@@ -1132,7 +1170,7 @@ function classifyContent(text: string): ContentClassification {
   
   // Detect content structure patterns
   const hasNumbers = numbers.length > 0;
-  const hasList = doc.match('#List').length > 2;
+  const hasList = (doc.match('#List') || []).length > 2;
   const hasTable = /\*\*Table\*\*/.test(text);
   const hasListStructure = (text.match(/^[-*+]\s/gm) || []).length > 3;
   
@@ -1481,6 +1519,12 @@ async function summarizeMarkdown(markdown: string, maxChunkWords = 700): Promise
   // Use intelligent chunking with adaptive sizing
   const rawSections = intelligentChunk(markdown, adaptiveChunkSize);
   
+  // Safety check for undefined rawSections
+  if (!rawSections || !Array.isArray(rawSections)) {
+    logger.error('intelligentChunk returned invalid data:', rawSections);
+    return markdown; // Return original markdown as fallback
+  }
+  
   // DEDUPLICATION: Remove similar sections using Natural.js similarity scoring
   const sections: string[] = [];
   const SIMILARITY_THRESHOLD = 0.85; // 85% similarity threshold
@@ -1601,6 +1645,13 @@ export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
     
     // PHASE 2: Advanced content region analysis
     const contentRegions = ContentAnalyzer.analyzeContentRegions(dom.window.document);
+    
+    // Safety check for contentRegions
+    if (!contentRegions || !Array.isArray(contentRegions)) {
+      logger.error('ContentAnalyzer.analyzeContentRegions returned invalid data:', contentRegions);
+      throw new Error('Failed to analyze content regions');
+    }
+    
     logger.info(`Identified ${contentRegions.length} content regions, top score: ${contentRegions[0]?.score.toFixed(3) || 'none'}`);
     
     // PHASE 3: Use Readability with fallback to content regions
