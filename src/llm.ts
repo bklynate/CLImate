@@ -6,15 +6,15 @@ import { systemPrompt } from '@src/systemPrompt';
 
 const models = [
   'llama4:16x17b',
-  'deepseek-r1:70b',
-  'qwen3:32b',
+  'gemma3:27b',
   'llama3.3:70b',
+  'nemotron:70b',
 ];
 
 export const runLLM = async ({
-  model = models[3],
+  model = models[2],
   messages,
-  temperature = 0.8,
+  temperature = 0.2,
   tools = [],
 }: {
   model?: string;

@@ -14,7 +14,7 @@ export const currentDateTimeToolDefinition = {
         .boolean()
         .optional()
         .default(false)
-        .describe('Whether to include location information (IP-based geolocation)'),
+        .describe('Whether to include location metadata (IP, city, country, etc)'),
       timezone: z
         .string()
         .optional()
@@ -26,12 +26,10 @@ export const currentDateTimeToolDefinition = {
         .describe('Format for the datetime output: iso (ISO 8601), human (readable), or both'),
       reasoning: z
         .string()
-        .optional()
-        .describe('(Optional) Explain reasoning behind the request'),
+        .describe('Explain why this request is being made and what it supports'),
       reflection: z
         .string()
-        .optional()
-        .describe('(Optional) Reflect on the output quality')
+        .describe('Describe how the output will be evaluated for usefulness or correctness'),
     })
     .describe('Parameters for retrieving current date and time information'),
   strict: true,
@@ -65,7 +63,7 @@ async function getLocationInfo(): Promise<LocationInfo> {
     }
 
     const data = await response.json() as any;
-    
+
     return {
       ip: data.query,
       city: data.city,
@@ -83,33 +81,37 @@ async function getLocationInfo(): Promise<LocationInfo> {
 }
 
 export const currentDateTime: ToolFn<Args, string> = async ({ toolArgs }) => {
-  const { include_location, timezone, format } = toolArgs;
+  const { include_location, timezone, format, reasoning, reflection } = toolArgs;
 
   try {
     let locationInfo: LocationInfo = {};
-    
-    // Get location if requested
-    if (include_location) {
+    let targetTimezone = timezone;
+
+    // If timezone not provided, attempt to infer from IP geolocation
+    if (!targetTimezone) {
+      locationInfo = await getLocationInfo();
+      if (locationInfo.timezone) {
+        targetTimezone = locationInfo.timezone;
+      } else {
+        targetTimezone =
+          Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+      }
+    }
+
+    // If include_location is requested and not already populated, get it
+    if (include_location && Object.keys(locationInfo).length === 0) {
       locationInfo = await getLocationInfo();
     }
 
-    // Determine timezone to use
-    let targetTimezone = timezone;
-    if (!targetTimezone && locationInfo.timezone) {
-      targetTimezone = locationInfo.timezone;
-    }
-    if (!targetTimezone) {
-      targetTimezone = 'America/New_York'; // Default fallback
-    }
-
-    // Get current date/time
+    // Get current time in resolved timezone
     const now = DateTime.now().setZone(targetTimezone);
-    
-    // Format the output
+
     const result: any = {
       timestamp: now.toISO(),
       timezone: targetTimezone,
       utc_offset: now.offsetNameShort,
+      reasoning,
+      reflection,
     };
 
     if (format === 'iso' || format === 'both') {
@@ -133,12 +135,10 @@ export const currentDateTime: ToolFn<Args, string> = async ({ toolArgs }) => {
       };
     }
 
-    // Add location info if requested
     if (include_location && Object.keys(locationInfo).length > 0) {
       result.location = locationInfo;
     }
 
-    // Add some useful calculated fields
     result.calculated = {
       day_of_year: now.ordinal,
       week_of_year: now.weekNumber,
@@ -153,17 +153,18 @@ export const currentDateTime: ToolFn<Args, string> = async ({ toolArgs }) => {
 
   } catch (error) {
     logger.error('Error getting current date/time:', error);
-    
-    // Fallback to basic DateTime
+
     const fallbackTime = DateTime.now();
     const fallbackResult = {
       error: 'Partial information available due to error',
       timestamp: fallbackTime.toISO(),
       human_readable: fallbackTime.toLocaleString(DateTime.DATETIME_FULL),
       timezone: fallbackTime.zoneName,
-      error_details: error instanceof Error ? error.message : 'Unknown error'
+      error_details: error instanceof Error ? error.message : 'Unknown error',
+      reasoning,
+      reflection,
     };
-    
+
     return JSON.stringify(fallbackResult, null, 2);
   }
 };
