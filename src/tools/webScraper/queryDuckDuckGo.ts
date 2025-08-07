@@ -6,9 +6,11 @@ import { SemanticRanker } from './semantic/SemanticRanker';
 import type { SearchResult } from './semantic/types';
 import { browserPool } from './BrowserPool';
 
-// Initialize semantic ranker
 const semanticRanker = new SemanticRanker();
 
+/* ------------------------------------------------------------------ */
+/*  tool definition                                                    */
+/* ------------------------------------------------------------------ */
 export const queryDuckDuckGoToolDefinition = {
   name: 'query_duckduckgo',
   description:
@@ -17,38 +19,111 @@ export const queryDuckDuckGoToolDefinition = {
     query: z.string().describe('Search query for DuckDuckGo HTML.'),
     numOfResults: z
       .number()
-      .describe('The maximum number of search results to return.'),
-    reasoning: z
-      .string()
-      .describe(
-        'Explain why this search is necessary and what you hope to find.',
-      ),
-    reflection: z
-      .string()
-      .describe(
-        'State how you will evaluate the reliability or relevance of the returned search results.',
-      ),
+      .int()
+      .positive()
+      .max(10)
+      .default(10)
+      .describe('Maximum number of results to load (≤10).'),
+    reasoning: z.string(),
+    reflection: z.string(),
   }),
   strict: true,
 };
 
 type Args = z.infer<typeof queryDuckDuckGoToolDefinition.parameters>;
 
-const decodeDuckDuckGoRedirect = (url: string): string => {
-  const match = url.match(/uddg=([^&]+)/);
-  return match ? decodeURIComponent(match[1]) : url;
-};
+/* ------------------------------------------------------------------ */
+/*  helper to decode DDG redirect links                                */
+/* ------------------------------------------------------------------ */
+function decodeDuckDuckGoRedirect(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    const encoded = parsed.searchParams.get('uddg');
+    return encoded ? decodeURIComponent(encoded) : rawUrl;
+  } catch {
+    // `rawUrl` wasn’t a valid absolute URL; fall back to regex
+    const match = rawUrl.match(/[?&]uddg=([^&]+)/);
+    return match ? decodeURIComponent(match[1]) : rawUrl;
+  }
+}
 
-// --- Fetch DDG search results ---
-async function fetchDuckDuckGoSearchResults(
-  query: string,
-): Promise<Array<{ title: string; url: string }>> {
+/* ------------------------------------------------------------------ */
+/*  fetch search-result HTML page                                      */
+/* ------------------------------------------------------------------ */
+async function fetchPageContent(url: string): Promise<string> {
+  let page: import('puppeteer').Page | undefined;
+
+  /* ------------ acquire a page, retry once if pool was resetting ------------ */
+  try {
+    page = await browserPool.getPage();
+  } catch (err: any) {
+    if (String(err?.message).includes('shutting down')) {
+      logger.warn('Browser pool was shutting down, attempting reset…');
+      browserPool.reset();
+      page = await browserPool.getPage();
+    } else {
+      throw err;
+    }
+  }
+
+  /* ---------- if we still failed, bail early to avoid undefined access ------ */
+  if (!page) throw new Error('Failed to obtain a browser page from the pool');
+
+  try {
+    await page.setUserAgent(
+      'Mozilla/5.0 (compatible; GPT-Scraper/1.0; +https://stockquery.app/bot)',
+    );
+
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 10_000 });
+
+    const html = await page.evaluate(() => {
+      const body = document.body?.innerHTML ?? '';
+      return body.trim().length
+        ? `<html><body>${body}</body></html>`
+        : document.documentElement.outerHTML;
+    });
+
+    try {
+      return await cleanHtml(html, url);
+    } catch (cleanErr: any) {
+      logger.warn(`cleanHtml failed for ${url}: ${cleanErr.message}`);
+      /* fallback: return raw markdown without summarisation so the user still sees content */
+      return (
+        html
+          .replace(/<[^>]+>/g, ' ') // naive strip tags
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 1_000) + '\n\n*(automatic cleaning failed)*'
+      );
+    }
+  } catch (navErr: any) {
+    logger.warn(`Navigation failed for ${url}: ${navErr.message}`);
+    return `Content unavailable from ${url}`;
+  } finally {
+    if (page) await browserPool.releasePage(page);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  fetch SERP, with your original rich extraction + logging           */
+/* ------------------------------------------------------------------ */
+async function fetchDuckDuckGoSearchResults(query: string): Promise<
+  Array<{
+    title: string;
+    url: string;
+    snippet?: string;
+    displayUrl?: string;
+    extras?: string;
+    resultType?: 'ad' | 'organic';
+  }>
+> {
   let page;
   try {
     page = await browserPool.getPage();
   } catch (error) {
-    if (error.message?.includes('shutting down')) {
-      logger.warn('Browser pool was shutting down, attempting reset...');
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('shutting down')) {
+      logger.warn('Browser pool was shutting down, attempting reset…');
       browserPool.reset();
       page = await browserPool.getPage();
     } else {
@@ -61,43 +136,41 @@ async function fetchDuckDuckGoSearchResults(
 
     await page.goto(`https://html.duckduckgo.com/html/?q=${encoded}`, {
       waitUntil: 'domcontentloaded',
-      timeout: 30000,
+      timeout: 15_000,
     });
 
-    // Enhanced extraction with snippets and metadata
-    const rawResults = await page.$$eval(
-      '.result',
-      (resultElements) =>
-        resultElements
-          .map((element) => {
-            const titleElement = element.querySelector(
-              'h2.result__title > a.result__a',
-            );
-            const snippetElement = element.querySelector('.result__snippet');
-            const urlElement = element.querySelector('.result__url');
-            const extraElement = element.querySelector('.result__extras');
+    const rawResults = await page.$$eval('.result', (resultElements) =>
+      resultElements
+        .map((el) => {
+          const titleElement = el.querySelector<HTMLAnchorElement>(
+            'h2.result__title > a.result__a',
+          );
+          const snippetElement =
+            el.querySelector<HTMLElement>('.result__snippet');
+          const urlElement = el.querySelector<HTMLElement>('.result__url');
+          const extraElement = el.querySelector<HTMLElement>('.result__extras');
 
-            return {
-              title: titleElement?.textContent?.trim() || '',
-              url: titleElement?.href || '',
-              snippet: snippetElement?.textContent?.trim() || '',
-              displayUrl: urlElement?.textContent?.trim() || '',
-              extras: extraElement?.textContent?.trim() || '', // May contain dates, file types, etc.
-              // Extract any additional metadata
-              resultType: element.className.includes('result--ad')
-                ? 'ad'
-                : 'organic',
-            };
-          })
-          .filter((result) => result.title && result.url), // Filter out empty results
+          return {
+            title: titleElement?.textContent?.trim() || '',
+            url: titleElement?.href || '',
+            snippet: snippetElement?.textContent?.trim() || '',
+            displayUrl: urlElement?.textContent?.trim() || '',
+            extras: extraElement?.textContent?.trim() || '',
+            resultType: el.className.includes('result--ad') ? 'ad' : 'organic',
+          };
+        })
+        .filter((r) => r.title && r.url),
     );
 
     const results = rawResults.map((r) => ({
       ...r,
       url: decodeDuckDuckGoRedirect(r.url),
+      resultType:
+        r.resultType === 'ad' || r.resultType === 'organic'
+          ? r.resultType
+          : undefined,
     }));
 
-    // Log data richness
     const withSnippets = results.filter(
       (r) => r.snippet && r.snippet.length > 10,
     ).length;
@@ -117,147 +190,58 @@ async function fetchDuckDuckGoSearchResults(
   }
 }
 
-// --- Rank results with robust semantic ranking ---
-async function fetchDuckDuckGoResultsWithRelevance(
-  query: string,
-): Promise<
-  Array<{
-    title: string;
-    url: string;
-    relevance: number;
-    rankingMethod: string;
-  }>
-> {
-  const results = await fetchDuckDuckGoSearchResults(query);
-
-  // Convert to SearchResult format with enhanced data
-  const searchResults: SearchResult[] = results.map((result) => ({
-    title: result.title,
-    url: result.url,
-    snippet: result.snippet || undefined,
-    description: result.extras || undefined, // Use extras as description fallback
-  }));
-
-  try {
-    // Use semantic ranking with enhanced data weights
-    const rankedResults = await semanticRanker.rankResults(
-      query,
-      searchResults,
-      {
-        useCache: true,
-        fallbackStrategy: 'position',
-        timeout: 30000,
-        weights: {
-          title: 0.6, // Primary weight for titles
-          snippet: 0.3, // Significant weight for snippets when available
-          description: 0.1, // Lower weight for extras/metadata
-        },
-      },
-    );
-
-    return rankedResults.map((result) => ({
-      title: result.title,
-      url: result.url,
-      relevance: result.relevance,
-      rankingMethod: result.rankingMethod,
-    }));
-  } catch (error) {
-    logger.error(
-      'Semantic ranking failed completely, using position fallback:',
-      error,
-    );
-    return results.map((result, i) => ({
-      ...result,
-      relevance: 1.0 - i * 0.1,
-      rankingMethod: 'position-fallback',
-    }));
-  }
-}
-
-// --- Page content fetch ---
-async function fetchPageContent(url: string): Promise<string> {
-  let page;
-  try {
-    page = await browserPool.getPage();
-  } catch (error) {
-    if (error.message?.includes('shutting down')) {
-      logger.warn('Browser pool was shutting down, attempting reset...');
-      browserPool.reset();
-      page = await browserPool.getPage();
-    } else {
-      throw error;
-    }
-  }
-
-  try {
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-
-    const html = await page.evaluate(() => {
-      const bodyContent = document.body?.innerHTML;
-      return bodyContent && bodyContent.trim().length > 0
-        ? `<html><body>${bodyContent}</body></html>`
-        : document.documentElement.outerHTML;
-    });
-
-    return cleanHtml(html, url);
-  } catch (err) {
-    logger.error(`Failed to extract content from ${url}:`, err);
-    return 'Error: Unable to extract content.';
-  } finally {
-    await browserPool.releasePage(page);
-  }
-}
-
-// --- Main Tool Entry Point ---
+/* ------------------------------------------------------------------ */
+/*  main tool function                                                 */
+/* ------------------------------------------------------------------ */
 export const queryDuckDuckGo: ToolFn<Args, string> = async ({ toolArgs }) => {
   const { query, numOfResults } = toolArgs;
 
-  const searchResults = await fetchDuckDuckGoResultsWithRelevance(query);
+  const searchResults = await fetchDuckDuckGoSearchResults(query);
+  const ranked: Array<
+    SearchResult & { relevance: number; rankingMethod: string }
+  > = await semanticRanker.rankResults(query, searchResults, {
+    useCache: true,
+    fallbackStrategy: 'position',
+    timeout: 30_000,
+  });
 
-  const parsedNum = Number(numOfResults);
-  const resultsCount =
-    Number.isFinite(parsedNum) && parsedNum < 3
-      ? searchResults.length
-      : parsedNum;
+  /* ---------------------------------------------------------------- */
+  /*  process pages in batches, honouring pool capacity                */
+  /* ---------------------------------------------------------------- */
+  const BATCH_SIZE = Math.min(3, browserPool.options.maxConcurrentPages);
+  const processed: string[] = [];
 
-  // Log ranking method used and pool stats
-  if (searchResults.length > 0) {
-    logger.info(
-      `DuckDuckGo semantic ranking using: ${searchResults[0].rankingMethod}`,
+  for (let i = 0; i < Math.min(numOfResults, ranked.length); i += BATCH_SIZE) {
+    const batch = ranked.slice(i, i + BATCH_SIZE);
+
+    const batchResults = await Promise.all(
+      batch.map(async (r) => {
+        try {
+          const content = await fetchPageContent(r.url);
+          return `**${r.title}** (relevance: ${r.relevance.toFixed(
+            3,
+          )})\n${content}\n`;
+        } catch (err: any) {
+          logger.warn(
+            `Error fetching content from ${r.url}:`,
+            err.message || 'Unknown',
+          );
+          return `**${r.title}** (relevance: ${r.relevance.toFixed(
+            3,
+          )})\nContent unavailable\n`;
+        }
+      }),
     );
+
+    processed.push(...batchResults); // <-- syntax fix
+
+    if (i + BATCH_SIZE < ranked.length) await sleep(500);
   }
 
-  const poolStats = browserPool.getStats();
-  logger.info(
-    `Browser pool stats: ${poolStats.browsers} browsers, ${poolStats.pages} pages, ${poolStats.pagesInUse} in use`,
-  );
-
-  // Process pages in parallel using the browser pool
-  const contentPromises = searchResults
-    .slice(0, resultsCount)
-    .map(async (result) => {
-      try {
-        const content = await fetchPageContent(result.url);
-        return `**${result.title}** (relevance: ${result.relevance.toFixed(
-          3,
-        )})\n${content}\n\n`;
-      } catch (err) {
-        logger.warn(`Error fetching content from ${result.url}:`, err.message);
-        return `**${result.title}** (relevance: ${result.relevance.toFixed(
-          3,
-        )})\nError fetching content: ${err.message}\n\n`;
-      }
-    });
-
-  // Wait for all content to be fetched concurrently
-  const startTime = Date.now();
-  const processed = await Promise.all(contentPromises);
-  const duration = Date.now() - startTime;
-
-  logger.info(
-    `DuckDuckGo results processed in ${duration}ms using ${
-      searchResults[0]?.rankingMethod || 'unknown'
-    } ranking (${processed.length} pages)`,
-  );
   return processed.join('\n');
 };
+
+/* simple sleep helper */
+function sleep(ms: number): Promise<void> {
+  return new Promise((res) => setTimeout(res, ms));
+}

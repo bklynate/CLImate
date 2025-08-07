@@ -24,7 +24,19 @@ class NaturalNLPAnalyzer {
     informativeness: number;
     overallQuality: number;
   } {
-    if (!text || text.trim().length < 50) {
+    // Guard against undefined/null input
+    if (!text || typeof text !== 'string') {
+      return {
+        readabilityScore: 0,
+        keywordDensity: 0,
+        sentimentScore: 0,
+        informativeness: 0,
+        overallQuality: 0,
+      };
+    }
+
+    const trimmed = text.trim();
+    if (trimmed.length < 20) { // Reduced from 50 to 20 for less restrictive filtering
       return {
         readabilityScore: 0,
         keywordDensity: 0,
@@ -36,10 +48,11 @@ class NaturalNLPAnalyzer {
 
     try {
       // Tokenize and analyze with safety checks
-      const tokens =
-        natural.WordTokenizer.prototype.tokenize(text.toLowerCase()) || [];
-      const sentences =
-        natural.SentenceTokenizer.prototype.tokenize(text) || [];
+      const tokenizeResult = natural.WordTokenizer.prototype.tokenize(text.toLowerCase());
+      const sentenceResult = natural.SentenceTokenizer.prototype.tokenize(text);
+      
+      const tokens = Array.isArray(tokenizeResult) ? tokenizeResult : [];
+      const sentences = Array.isArray(sentenceResult) ? sentenceResult : [];
 
       // Calculate readability (Flesch-Kincaid approximation)
       const avgWordsPerSentence = tokens.length / Math.max(sentences.length, 1);
@@ -187,9 +200,14 @@ class NaturalNLPAnalyzer {
    */
   static extractKeyTerms(text: string, maxTerms: number = 10): string[] {
     try {
-      const tokens = (
-        natural.WordTokenizer.prototype.tokenize(text.toLowerCase()) || []
-      ).filter((token) => token.length > 3 && !/^\d+$/.test(token)); // Filter short words and numbers
+      // Guard against undefined/null input
+      if (!text || typeof text !== 'string') {
+        return [];
+      }
+
+      const tokenizeResult = natural.WordTokenizer.prototype.tokenize(text.toLowerCase());
+      const rawTokens = Array.isArray(tokenizeResult) ? tokenizeResult : [];
+      const tokens = rawTokens.filter((token) => token.length > 3 && !/^\d+$/.test(token)); // Filter short words and numbers
 
       if (tokens.length === 0) return [];
 
@@ -256,7 +274,7 @@ class NaturalNLPAnalyzer {
   }
 }
 
-// Advanced DOM Analysis Types"}
+// Advanced DOM Analysis Types"
 interface ContentRegion {
   element: Element;
   score: number;
@@ -1141,6 +1159,11 @@ function validateSummaryQuality(
 function assessContentQuality(text: string): number {
   let score = 50; // Base score
 
+  // Guard against undefined/null input
+  if (!text || typeof text !== 'string') {
+    return 0;
+  }
+
   const trimmed = text.trim();
   if (!trimmed) return 0;
 
@@ -1583,7 +1606,7 @@ async function intelligentSummarization(
       early_stopping: true,
     };
 
-    const firstSummary = await summarizerService.summarize(
+    let firstSummary = await summarizerService.summarize(
       text,
       firstPassParams,
     );

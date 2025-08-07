@@ -297,19 +297,16 @@ export class BrowserPool {
    */
   private async resetPage(page: Page): Promise<void> {
     try {
-      // Clear any existing navigation
+      // Clear any timers or intervals
       await page.evaluate(() => {
-        // Clear any timers or intervals
         for (let i = 1; i < 99999; i++) {
           window.clearTimeout(i);
           window.clearInterval(i);
         }
       });
 
-      // Navigate to blank page to clear state
-      await page.goto('about:blank', { waitUntil: 'load', timeout: 5000 });
-      
-    } catch (error) {
+      await page.goto('about:blank', { waitUntil: 'load', timeout: 5_000 });
+    } catch (error: any) {
       throw new Error(`Failed to reset page: ${error.message}`);
     }
   }
