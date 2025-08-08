@@ -60,6 +60,7 @@ node_modules/
 jspm_packages/
 .claude/
 mcp-servers/
+.vscode
 # Snowpack dependency directory (https://snowpack.dev/)
 
 web_modules/
