@@ -1,6 +1,5 @@
 import type OpenAI from 'openai';
-import { queryDuckDuckGo } from '@tools/webScraper/queryDuckDuckGo';
-import { fetchTrackedSports, getOddsUSA } from '@tools/bettingOdds';
+import { queryDuckDuckGo } from '@src/tools/webScraper/queryDuckDuckGo';
 import { currentWeather } from '@tools/weather';
 import { currentLocationTool } from '@tools/currentLocation';
 import { currentDateTime } from '@tools/dateTime';
