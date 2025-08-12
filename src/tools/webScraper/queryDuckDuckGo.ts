@@ -1,13 +1,20 @@
-import '@tensorflow/tfjs-node';
 import type { ToolFn } from 'types';
-import puppeteer from 'puppeteer-extra';
-import randomUseragent from 'random-useragent';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { z } from 'zod';
+import got from 'got';
+import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import randomUseragent from 'random-useragent';
+import pLimit from 'p-limit';
+
 import { cleanHtml } from './cleanHTML';
 import logger from '@utils/logger';
 
 puppeteer.use(StealthPlugin());
+
+/* ------------------------------------------------------------------ */
+/*  Tool definition                                                    */
+/* ------------------------------------------------------------------ */
 
 export const queryDuckDuckGoToolDefinition = {
   name: 'query_duckduckgo',
@@ -24,110 +31,197 @@ export const queryDuckDuckGoToolDefinition = {
 
 type Args = z.infer<typeof queryDuckDuckGoToolDefinition.parameters>;
 
-const decodeDuckDuckGoRedirect = (url: string): string => {
-  const match = url.match(/uddg=([^&]+)/);
-  return match ? decodeURIComponent(match[1]) : url;
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+const USER_AGENT_FALLBACK = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+const decodeDuckDuckGoRedirect = (raw: string): string => {
+  try {
+    const u = new URL(raw, 'https://duckduckgo.com');
+    const uddg = u.searchParams.get('uddg');
+    if (uddg) return decodeURIComponent(uddg);
+    return u.toString();
+  } catch {
+    return raw;
+  }
 };
 
-// --- Fetch DDG search results ---
+function canonicalKey(u: string) {
+  try {
+    const url = new URL(u);
+    url.hash = '';
+    url.searchParams.sort();
+    const q = url.searchParams.toString();
+    return `${url.origin}${url.pathname}${q ? `?${q}` : ''}`;
+  } catch {
+    return u;
+  }
+}
+
+function dedupeByUrl<T extends { url: string }>(arr: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of arr) {
+    const key = canonicalKey(item.url);
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Search via DDG HTML (no puppeteer)                                 */
+/* ------------------------------------------------------------------ */
+
 async function fetchDuckDuckGoSearchResults(
   query: string,
 ): Promise<Array<{ title: string; url: string }>> {
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+  const res = await got('https://html.duckduckgo.com/html/', {
+    searchParams: { q: query, kl: 'us-en', kp: '-2' },
+    timeout: { request: 15000 },
+    headers: { 'user-agent': USER_AGENT_FALLBACK },
+  });
 
-  try {
-    const encoded = encodeURIComponent(query);
-    await page.setUserAgent(randomUseragent.getRandom());
+  const $ = cheerio.load(res.body);
+  const results = $('h2.result__title a.result__a')
+    .map((_i, a) => {
+      const $a = $(a);
+      return {
+        title: $a.text().trim(),
+        url: decodeDuckDuckGoRedirect($a.attr('href') || ''),
+      };
+    })
+    .get()
+    .filter(r => r.title && r.url.startsWith('http'));
 
-    await page.goto(`https://html.duckduckgo.com/html/?q=${encoded}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
-    });
-
-    const rawResults = await page.$$eval(
-      'h2.result__title > a.result__a',
-      (anchors) =>
-        anchors.map((a) => ({
-          title: a.textContent?.trim() || '',
-          url: a.href,
-        })),
-    );
-
-    const results = rawResults.map((r) => ({
-      ...r,
-      url: decodeDuckDuckGoRedirect(r.url),
-    }));
-
-    logger.info(`Fetched ${results.length} DuckDuckGo results.`);
-    return results;
-  } catch (err) {
-    logger.error('DuckDuckGo scraping failed:', err);
-    throw new Error('Failed to fetch DuckDuckGo search results');
-  } finally {
-    await browser.close();
-  }
+  return dedupeByUrl(results);
 }
 
-// --- Rank results with USE (temporarily disabled due to ONNX issues) ---
-async function fetchDuckDuckGoResultsWithRelevance(
-  query: string,
-): Promise<Array<{ title: string; url: string; relevance: number }>> {
-  const results = await fetchDuckDuckGoSearchResults(query);
-  
-  // Temporarily return results without USE ranking to avoid ONNX issues
-  return results.map((result, i) => ({
-    ...result,
-    relevance: 1.0 - (i * 0.1), // Simple decreasing relevance
-  }));
+/* ------------------------------------------------------------------ */
+/*  Page fetch: HTTP first, Puppeteer fallback                         */
+/* ------------------------------------------------------------------ */
+
+function looksJsBlocked(html: string) {
+  return /enable javascript|turn on javascript|unsupported browser/i.test(html);
 }
 
-// --- Page content fetch ---
-async function fetchPageContent(url: string): Promise<string> {
+async function fetchWithPuppeteer(url: string): Promise<string> {
   const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
-
   try {
-    await page.setUserAgent(randomUseragent.getRandom());
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    const page = await browser.newPage();
+    await page.setUserAgent(randomUseragent.getRandom() || USER_AGENT_FALLBACK);
 
-    const html = await page.evaluate(() => {
-      const bodyContent = document.body?.innerHTML;
-      return bodyContent && bodyContent.trim().length > 0
-        ? `<html><body>${bodyContent}</body></html>`
-        : document.documentElement.outerHTML;
+    await page.setRequestInterception(true);
+    page.on('request', req => {
+      const rt = req.resourceType();
+      if (['image', 'media', 'font', 'stylesheet'].includes(rt)) req.abort();
+      else req.continue();
     });
 
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    const html = await page.content();
     return cleanHtml(html, url);
-  } catch (err) {
-    logger.error(`Failed to extract content from ${url}:`, err);
-    return 'Error: Unable to extract content.';
   } finally {
     await browser.close();
   }
 }
 
-// --- Main Tool Entry Point ---
+async function fetchPageContent(url: string): Promise<string> {
+  try {
+    const res = await got(url, {
+      timeout: { request: 15000 },
+      headers: { 'user-agent': USER_AGENT_FALLBACK },
+      followRedirect: true,
+      throwHttpErrors: false,
+    });
+
+    const ctype = (res.headers['content-type'] || '').toLowerCase();
+
+    if (ctype.includes('application/pdf')) {
+      // Optional: plug in a pdf->text extractor if you want
+      return [
+        '---',
+        `source_url: ${url}`,
+        `title: ""`,
+        `published: ""`,
+        `lang: ""`,
+        '---',
+        '',
+        '_PDF detected. Skipping extraction._',
+      ].join('\n');
+    }
+
+    if (!ctype.includes('text/html')) {
+      return [
+        '---',
+        `source_url: ${url}`,
+        `title: ""`,
+        `published: ""`,
+        `lang: ""`,
+        '---',
+        '',
+        '_Non-HTML content. Skipping._',
+      ].join('\n');
+    }
+
+    const html = res.body || '';
+    if (looksJsBlocked(html) || html.length < 1000) {
+      // JS-required or too small; try headless
+      return await fetchWithPuppeteer(url);
+    }
+
+    return await cleanHtml(html, url);
+  } catch (e) {
+    logger.warn(`Plain fetch failed for ${url}, trying Puppeteer.`, e);
+    try {
+      return await fetchWithPuppeteer(url);
+    } catch (err) {
+      logger.error(`Failed to extract content from ${url}:`, err);
+      return [
+        '---',
+        `source_url: ${url}`,
+        `title: ""`,
+        `published: ""`,
+        `lang: ""`,
+        '---',
+        '',
+        'Error: Unable to extract content.',
+      ].join('\n');
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Main tool                                                          */
+/* ------------------------------------------------------------------ */
+
 export const queryDuckDuckGo: ToolFn<Args, string> = async ({ toolArgs }) => {
   const { query, numOfResults } = toolArgs;
 
-  const searchResults = await fetchDuckDuckGoResultsWithRelevance(query);
-
+  const searchResults = await fetchDuckDuckGoSearchResults(query);
   const parsedNum = Number(numOfResults);
-  const resultsCount =
-    Number.isFinite(parsedNum) && parsedNum < 3 ? searchResults.length : parsedNum;
+  const resultsCount = Math.min(
+    searchResults.length,
+    Number.isFinite(parsedNum) && parsedNum > 0 ? parsedNum : 3
+  );
 
-  const processed = [];
+  const limit = pLimit(4);
+  const tasks = searchResults.slice(0, resultsCount).map((result) =>
+    limit(async () => {
+      try {
+        const content = await fetchPageContent(result.url);
+        return `**${result.title}**\n${content}\n\n`;
+      } catch {
+        return `**${result.title}**\nError fetching content.\n\n`;
+      }
+    })
+  );
 
-  for (const result of searchResults.slice(0, resultsCount)) {
-    try {
-      const content = await fetchPageContent(result.url);
-      processed.push(`**${result.title}**\n${content}\n\n`);
-    } catch (err) {
-      processed.push(`**${result.title}**\nError fetching content.\n\n`);
-    }
-  }
-
-  logger.info('DuckDuckGo results processed successfully');
+  const processed = await Promise.all(tasks);
+  logger.info(`DuckDuckGo results processed successfully: ${processed.length} items.`);
   return processed.join('\n');
 };

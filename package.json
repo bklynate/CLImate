@@ -58,6 +58,7 @@
     "ollama": "^0.5.16",
     "openai": "^4.73.1",
     "ora": "^8.1.1",
+    "p-limit": "^6.2.0",
     "p-throttle": "^7.0.0",
     "puppeteer": "^24.10.2",
     "puppeteer-extra": "^3.3.6",
