@@ -30,22 +30,20 @@ export const runLLM = async ({
   // Generate enhanced system prompt with task-specific examples
   const enhancedPrompt = await enhanceSystemPrompt(messages, userInput);
 
-  const response = await getLocalAIByProvider('ollama').chat.completions.create(
-    {
-      model,
-      temperature,
-      messages: [
-        {
-          role: 'system',
-          content: enhancedPrompt,
-        },
-        ...messages,
-      ],
-      tools: formattedTools,
-      tool_choice: 'auto',
-      parallel_tool_calls: false,
-    },
-  );
+  const response = await getLocalAIByProvider('ollama').chat.completions.create({
+    model,
+    temperature,
+    messages: [
+      {
+        role: 'system',
+        content: enhancedPrompt,
+      },
+      ...messages,
+    ],
+    tools: formattedTools,
+    tool_choice: 'auto',
+    parallel_tool_calls: false,
+  });
 
   return response.choices[0].message;
 };

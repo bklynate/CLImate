@@ -7,6 +7,8 @@ what is the current weather in carriacou?
 
 I heard Juan Soto signed a massive new deal. What team did he sign with and how much was the deal?
 
+The Dodgers and Angels are playing today. Please return a data-driven breakdown in Markdown format with labeled sections: (1) Strikeout Projections for each starting pitcher, using recent form (last 5 starts), season-long K/9 and WHIP, opposing team’s strikeout rate vs handedness, and matchup history; (2) Likely Hitters (1–2 per team) to record at least one hit, based on batting averages, L/R splits, recent trends, and historical performance vs the opposing pitcher; (3) Betting Market Analysis, including the current runline and moneyline, and which side of each offers the most value using data like bullpen ERA, run differential, recent records, and home/away splits; and (4) a 3-Leg Same-Game Parlay combining one pitcher strikeout total, one or two hitters to get a hit, and either the runline or moneyline. Clearly explain your reasoning for each leg with supporting stats. If odds or stats are missing, use a tool call or state that the information is unavailable.
+
 
 The Marlins and Orioles are playing today. Based on recent form, matchup history, and historical averages,
 estimate strikeouts for each starting pitcher. Additionally, identify 1–2 hitters from each team who are most likely to record at least one hit,
