@@ -18,3 +18,6 @@ determine which side of each line—runline and moneyline—offers the most valu
 using your projections and reasoning, construct a 3-leg parlay that combines strikeout totals, hitter outcomes,
 and either the runline or moneyline. 
 Clearly explain your reasoning for each leg of the parlay and cite all relevant stats used to support your picks.
+
+
+The White Sox and Mariners are playing today. Please return a data-driven breakdown in Markdown format with labeled sections: (1) Strikeout Projections for each starting pitcher, using recent form (last 5 starts), season-long K/9 and WHIP, opposing team’s strikeout rate vs handedness, and matchup history; (2) Likely Hitters (1–2 per team) to record at least one hit, based on batting averages, L/R splits, recent trends, and historical performance vs the opposing pitcher; (3) Betting Market Analysis, including the current runline and moneyline, and which side of each offers the most value using data like bullpen ERA, run differential, recent records, and home/away splits; and (4) a 3-Leg Same-Game Parlay combining one pitcher strikeout total, one or two hitters to get a hit, and either the runline or moneyline. Clearly explain your reasoning for each leg with supporting stats. If odds or stats are missing, use a tool call or state that the information is unavailable.
