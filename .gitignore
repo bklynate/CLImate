@@ -144,6 +144,8 @@ dist
 # Serverless directories
 
 .serverless/
+.github/
+.vscode/
 
 # FuseBox cache
 
