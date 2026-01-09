@@ -146,6 +146,7 @@ dist
 .serverless/
 .github/
 .vscode/
+.specstory/
 
 # FuseBox cache
 
