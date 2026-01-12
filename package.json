@@ -5,7 +5,15 @@
   "scripts": {
     "start:trace": "NODE_OPTIONS='--trace-deprecation' npx tsx index.ts",
     "dev": "echo '{\"messages\": []}' > db.json && OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES ORT_LOG_SEVERITY_LEVEL=3 ORT_LOGGING_LEVEL=3 NODE_OPTIONS='--no-deprecation' npx tsx index.ts",
-    "start": "ORT_LOG_SEVERITY_LEVEL=3 NODE_OPTIONS='--no-deprecation' npx tsx index.ts"
+    "start": "ORT_LOG_SEVERITY_LEVEL=3 NODE_OPTIONS='--no-deprecation' npx tsx index.ts",
+    "dev:langchain": "NODE_OPTIONS='--no-deprecation' npx tsx src-langchain/index.ts",
+    "dev:langchain:reset": "echo '{\"messages\": [], \"threadId\": null}' > db-langchain.json && npm run dev:langchain",
+    "cli": "NODE_OPTIONS='--no-deprecation' npx tsx src-langchain/cli.ts",
+    "cli:reset": "echo '{\"messages\": [], \"threadId\": null}' > db-langchain.json && npm run cli",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@commander-js/extra-typings": "^12.1.0",
@@ -21,7 +29,9 @@
     "@types/random-useragent": "^0.3.3",
     "@types/sanitize-html": "^2.13.0",
     "@types/turndown": "^5.0.5",
-    "@types/winston": "^2.4.4"
+    "@types/winston": "^2.4.4",
+    "@vitest/ui": "^4.0.16",
+    "vitest": "^4.0.16"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -29,6 +39,10 @@
   "dependencies": {
     "@agent-infra/duckduckgo-search": "^0.0.1",
     "@balldontlie/sdk": "^1.1.2",
+    "@langchain/core": "^0.3.80",
+    "@langchain/langgraph": "^0.2.74",
+    "@langchain/ollama": "^0.2.4",
+    "@langchain/openai": "^0.4.9",
     "@mozilla/readability": "^0.5.0",
     "@postlight/parser": "^2.2.3",
     "@tensorflow-models/universal-sentence-encoder": "^1.3.3",
@@ -50,6 +64,7 @@
     "jsdom": "^25.0.1",
     "json2md": "^2.0.3",
     "jsonrepair": "^3.13.0",
+    "langchain": "^0.3.37",
     "lowdb": "^7.0.1",
     "luxon": "^3.5.0",
     "natural": "^8.1.0",

@@ -1,0 +1,13 @@
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-12T04:15:48.618Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-12T04:15:48.634Z"}
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-12T04:16:06.872Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-12T04:16:06.887Z"}
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-12T04:20:44.349Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-12T04:20:44.365Z"}
+{"level":"info","message":"[cli] CLI started","streaming":true,"threadId":"cff4b88f-b64c-4281-b1af-f5dece637938","timestamp":"2026-01-12T04:43:34.810Z"}
+{"level":"info","message":"[cli] User force closed","timestamp":"2026-01-12T04:47:07.271Z"}
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-12T04:47:07.814Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-12T04:47:07.830Z"}
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-12T04:47:13.787Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-12T04:47:13.802Z"}
+{"level":"info","message":"[cli] CLI started","streaming":true,"threadId":"cff4b88f-b64c-4281-b1af-f5dece637938","timestamp":"2026-01-12T04:47:34.185Z"}
