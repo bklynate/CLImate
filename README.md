@@ -1,4 +1,5 @@
 ### **CLImate**
+[Latest Major Change Rebuilds The Agent Using Langchain](https://github.com/bklynate/CLImate?tab=readme-ov-file#langchain-agent-implementation)
 
 ---
 
