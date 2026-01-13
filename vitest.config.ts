@@ -5,18 +5,22 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src-langchain/**/*.test.ts'],
+    include: [
+      'src-langchain/**/*.test.ts',
+      'src/**/__tests__/**/*.test.ts',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['src-langchain/**/*.ts'],
-      exclude: ['src-langchain/**/*.test.ts'],
+      include: ['src-langchain/**/*.ts', 'src/**/*.ts'],
+      exclude: ['src-langchain/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
     },
-    testTimeout: 30000, // 30 seconds for API calls
+    testTimeout: 60000, // 60 seconds for ML model loading
   },
   resolve: {
     alias: {
       '@langchain': path.resolve(__dirname, 'node_modules/@langchain'),
+      '@src': path.resolve(__dirname, 'src'),
     },
   },
 });

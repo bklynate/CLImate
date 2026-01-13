@@ -3,6 +3,13 @@ import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
 import { addMessages } from '@src/memory';
 import { pipeline } from '@xenova/transformers';
+import type {
+  CleanHtmlOptions,
+  ContentClassification,
+  ContentDomain,
+  DocumentMetadata,
+} from './types';
+import { DEFAULT_CLEAN_HTML_OPTIONS } from './types';
 import { remark } from 'remark';
 import remarkGfm from 'remark-gfm';
 import { visit } from 'unist-util-visit';
@@ -52,13 +59,111 @@ const UNWANTED = [
   'header', 'aside', '.header', '.sidebar',
   
   // Comments/User Content
-  '[class*="comment"]', '[class*="discuss"]'
+  '[class*="comment"]', '[class*="discuss"]',
+  
+  // Paywall/Login walls
+  '[class*="paywall"]', '[class*="login"]', '[class*="signin"]', '[class*="gate"]',
+  '[class*="subscription"]', '[class*="premium"]', '[class*="members-only"]',
+  
+  // Call-to-action / Promotional
+  '[class*="cta"]', '[class*="call-to-action"]', '[class*="promo-"]',
+  '[class*="upsell"]', '[class*="cross-sell"]', '[class*="offer"]',
+  
+  // Recommended/Suggested content
+  '[class*="recommended"]', '[class*="suggested"]', '[class*="you-may-like"]',
+  '[class*="more-from"]', '[class*="also-read"]', '[class*="related-posts"]',
+  
+  // Sponsored/Partner content
+  '[class*="sponsored"]', '[class*="partner"]', '[class*="affiliate"]',
+  '[class*="advertorial"]', '[data-sponsored]',
+  
+  // App download prompts
+  '[class*="app-download"]', '[class*="download-app"]', '[class*="smart-banner"]',
+  
+  // Sticky elements
+  '[class*="sticky"]', '[class*="fixed-bottom"]', '[class*="floating"]',
 ];
 
-function removeBoilerplate(node: Element) {
+function removeBoilerplate(node: Element, additionalSelectors?: string[]) {
+  // Remove default unwanted elements
   UNWANTED.forEach((sel) => {
     node.querySelectorAll(sel).forEach((el) => el.remove());
   });
+  
+  // Remove additional custom selectors if provided
+  if (additionalSelectors?.length) {
+    additionalSelectors.forEach((sel) => {
+      try {
+        node.querySelectorAll(sel).forEach((el) => el.remove());
+      } catch {
+        // Invalid selector, skip
+      }
+    });
+  }
+}
+
+/**
+ * Remove blocks that are mostly links (likely navigation menus, link lists)
+ * Threshold: if >60% of text content is within links, remove the block
+ */
+function removeLinkHeavyBlocks(node: Element, threshold = 0.6) {
+  const candidates = node.querySelectorAll('div, section, ul, ol, p');
+  const toRemove: Element[] = [];
+  
+  candidates.forEach((el) => {
+    const totalText = el.textContent?.trim().length || 0;
+    if (totalText < 30) return; // Skip very short blocks
+    
+    const links = el.querySelectorAll('a');
+    let linkTextLength = 0;
+    
+    links.forEach((link) => {
+      linkTextLength += link.textContent?.trim().length || 0;
+    });
+    
+    const linkRatio = linkTextLength / totalText;
+    
+    // Check if this element is mostly links AND has multiple links
+    if (linkRatio > threshold && links.length >= 3) {
+      // Don't remove if it's clearly an article list (has paragraphs or structured content)
+      const hasParagraphs = el.querySelectorAll('p').length > 0;
+      const hasArticleContent = el.querySelector('article, .article, .post, .content');
+      
+      if (!hasParagraphs && !hasArticleContent) {
+        toRemove.push(el);
+      }
+    }
+  });
+  
+  // Remove identified link-heavy blocks
+  toRemove.forEach((el) => el.remove());
+}
+
+/**
+ * Remove common boilerplate text patterns
+ */
+function removeBoilerplateText(text: string): string {
+  const boilerplatePatterns = [
+    /read more\.{0,3}$/gim,
+    /continue reading\.{0,3}$/gim,
+    /click here to .+$/gim,
+    /subscribe to .+$/gim,
+    /sign up for .+$/gim,
+    /follow us on .+$/gim,
+    /share this (article|post|story)/gim,
+    /\d+ (comments?|replies)/gim,
+    /advertisement/gim,
+    /loading\.{2,}/gim,
+    /please enable javascript/gim,
+    /cookies? (are )?(required|enabled|disabled)/gim,
+  ];
+  
+  let cleaned = text;
+  boilerplatePatterns.forEach((pattern) => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+  
+  return cleaned;
 }
 
 const turndownService = new TurndownService({
@@ -525,16 +630,105 @@ function intelligentChunk(markdown: string, maxChunkWords = 700): string[] {
 }
 
 // STAGE 1: CLASSIFY - Identify content type and characteristics
-interface ContentClassification {
-  domain: 'sports' | 'news' | 'financial' | 'technical' | 'entertainment' | 'general';
-  subtype: string;
-  priority: 'high' | 'medium' | 'low';
-  dataType: 'structured' | 'narrative' | 'mixed';
-  keyEntities: string[];
-  confidenceScore: number;
+// ContentClassification is now imported from ./types
+
+/**
+ * Extract domain hints from URL path and hostname
+ */
+function getUrlDomainHints(url: string): Partial<ContentClassification> {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    const hostname = parsed.hostname.toLowerCase();
+    
+    // Sports sites and paths
+    if (/\/(sports?|nba|nfl|mlb|nhl|soccer|football|basketball|baseball|hockey)/i.test(path) ||
+        /(espn|bleacherreport|sports|athletic|nba|nfl|mlb)\./.test(hostname)) {
+      return { domain: 'sports' as ContentDomain, confidenceScore: 70 };
+    }
+    
+    // Financial sites and paths
+    if (/\/(finance|stock|market|investing|money|economy|business)/i.test(path) ||
+        /(bloomberg|reuters|wsj|marketwatch|yahoo.*finance|cnbc)\./.test(hostname)) {
+      return { domain: 'financial' as ContentDomain, confidenceScore: 70 };
+    }
+    
+    // News sites
+    if (/\/(news|world|politics|breaking)/i.test(path) ||
+        /(cnn|bbc|nytimes|washingtonpost|theguardian|reuters|apnews)\./.test(hostname)) {
+      return { domain: 'news' as ContentDomain, confidenceScore: 65 };
+    }
+    
+    // Technical/Developer sites
+    if (/\/(docs?|api|developer|technical|programming|code)/i.test(path) ||
+        /(github|stackoverflow|dev\.to|medium|hackernews)\./.test(hostname)) {
+      return { domain: 'technical' as ContentDomain, confidenceScore: 65 };
+    }
+    
+    // Educational
+    if (/\/(learn|course|tutorial|education|study)/i.test(path) ||
+        /(\.edu|coursera|udemy|khan|wikipedia)\./.test(hostname)) {
+      return { domain: 'educational' as ContentDomain, confidenceScore: 60 };
+    }
+    
+    // Scientific
+    if (/\/(research|paper|study|journal|science)/i.test(path) ||
+        /(nature|science|pubmed|arxiv|springer)\./.test(hostname)) {
+      return { domain: 'scientific' as ContentDomain, confidenceScore: 65 };
+    }
+    
+    // E-commerce
+    if (/\/(product|shop|store|buy|cart|checkout)/i.test(path) ||
+        /(amazon|ebay|shopify|etsy)\./.test(hostname)) {
+      return { domain: 'ecommerce' as ContentDomain, confidenceScore: 70 };
+    }
+    
+    return {};
+  } catch {
+    return {};
+  }
 }
 
-function classifyContent(text: string): ContentClassification {
+/**
+ * Extract metadata from HTML document
+ */
+function extractDocumentMetadata(doc: Document, url: string): DocumentMetadata {
+  const metadata: DocumentMetadata = {
+    urlHints: getUrlDomainHints(url),
+  };
+  
+  // Title
+  const title = doc.querySelector('title')?.textContent?.trim() ||
+                doc.querySelector('h1')?.textContent?.trim() ||
+                doc.querySelector('meta[property="og:title"]')?.getAttribute('content');
+  if (title) metadata.title = title;
+  
+  // Description
+  const description = doc.querySelector('meta[name="description"]')?.getAttribute('content') ||
+                      doc.querySelector('meta[property="og:description"]')?.getAttribute('content');
+  if (description) metadata.description = description;
+  
+  // OG Type
+  const ogType = doc.querySelector('meta[property="og:type"]')?.getAttribute('content');
+  if (ogType) metadata.ogType = ogType;
+  
+  // Article section
+  const articleSection = doc.querySelector('meta[property="article:section"]')?.getAttribute('content');
+  if (articleSection) metadata.articleSection = articleSection;
+  
+  // Published date
+  const publishedDate = doc.querySelector('meta[property="article:published_time"]')?.getAttribute('content') ||
+                        doc.querySelector('time[datetime]')?.getAttribute('datetime');
+  if (publishedDate) metadata.publishedDate = publishedDate;
+  
+  // Authors
+  const authorMeta = doc.querySelector('meta[name="author"]')?.getAttribute('content');
+  if (authorMeta) metadata.authors = [authorMeta];
+  
+  return metadata;
+}
+
+function classifyContent(text: string, urlHints?: Partial<ContentClassification>): ContentClassification {
   // Use Compromise for smart entity extraction
   const doc = nlp(text);
   const people = doc.people().out('array');
@@ -552,19 +746,33 @@ function classifyContent(text: string): ContentClassification {
   const financialTerms = ['stock', 'market', 'price', 'earnings', 'revenue', 'profit', 'investment', 'trading', 'dollar'];
   const newsTerms = ['breaking', 'report', 'announced', 'statement', 'official', 'according', 'source', 'investigate'];
   const techTerms = ['software', 'technology', 'app', 'system', 'platform', 'digital', 'algorithm', 'data', 'api'];
+  const educationalTerms = ['learn', 'course', 'tutorial', 'lesson', 'study', 'education', 'student', 'teaching'];
+  const scientificTerms = ['research', 'study', 'experiment', 'hypothesis', 'data', 'analysis', 'findings', 'conclusion'];
   
   // Score domains using stemmed tokens for better matching
-  const domainScores = {
+  const domainScores: Record<string, number> = {
     sports: sportsTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
     financial: financialTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
     news: newsTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
-    technical: techTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length
+    technical: techTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
+    educational: educationalTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
+    scientific: scientificTerms.filter(term => stemmed.includes(natural.PorterStemmer.stem(term))).length,
   };
   
+  // Boost score for domain if URL hints suggest it
+  if (urlHints?.domain && domainScores[urlHints.domain] !== undefined) {
+    domainScores[urlHints.domain] += 2; // URL hint gives a 2-point boost
+  }
+  
   const maxScore = Math.max(...Object.values(domainScores));
-  const domain = maxScore > 1 ? 
-    (Object.entries(domainScores).find(([_, score]) => score === maxScore)?.[0] as ContentClassification['domain']) || 'general' 
+  let domain: ContentDomain = maxScore > 1 ? 
+    (Object.entries(domainScores).find(([_, score]) => score === maxScore)?.[0] as ContentDomain) || 'general' 
     : 'general';
+  
+  // If content analysis is inconclusive but URL hints are strong, use URL hints
+  if (domain === 'general' && urlHints?.domain && (urlHints.confidenceScore || 0) >= 65) {
+    domain = urlHints.domain;
+  }
   
   // Smart subtype detection using Compromise
   let subtype = 'standard';
@@ -883,89 +1091,55 @@ function naturalExtractiveSummary(text: string, maxSentences = 3): string {
   return topSentences.join(' ');
 }
 
-async function summarizeMarkdown(markdown: string, maxChunkWords = 700): Promise<string> {
-  // Assess overall content quality to determine optimal chunk size
-  const overallQuality = assessContentQuality(markdown);
+/**
+ * Clean and extract readable content from raw HTML.
+ * 
+ * This function uses Mozilla's Readability to extract the main content,
+ * converts it to Markdown, deduplicates content, and optionally summarizes
+ * long documents using ML-based summarization.
+ * 
+ * @param rawHtml - The raw HTML string to process
+ * @param url - The URL the HTML was fetched from (used for relative link resolution and domain hints)
+ * @param options - Optional configuration for cleaning behavior
+ * @returns Cleaned markdown content
+ * 
+ * @example
+ * // Basic usage (backward compatible)
+ * const content = await cleanHtml(html, 'https://example.com');
+ * 
+ * @example
+ * // With options
+ * const content = await cleanHtml(html, 'https://example.com', {
+ *   format: 'summary',
+ *   maxLength: 2000,
+ *   domain: 'news',
+ * });
+ */
+export async function cleanHtml(
+  rawHtml: string,
+  url: string,
+  options?: CleanHtmlOptions
+): Promise<string> {
+  // Merge options with defaults
+  const opts = { ...DEFAULT_CLEAN_HTML_OPTIONS, ...options };
   
-  // Adjust chunk size based on quality
-  // Higher quality content gets larger chunks to preserve context
-  let adaptiveChunkSize = maxChunkWords;
-  if (overallQuality >= 70) {
-    adaptiveChunkSize = Math.floor(maxChunkWords * 1.4); // 980 words for high-quality
-  } else if (overallQuality >= 50) {
-    adaptiveChunkSize = Math.floor(maxChunkWords * 1.2); // 840 words for medium-quality
-  } else if (overallQuality < 30) {
-    adaptiveChunkSize = Math.floor(maxChunkWords * 0.8); // 560 words for low-quality
-  }
-  
-  // Use intelligent chunking with adaptive sizing
-  const sections = intelligentChunk(markdown, adaptiveChunkSize);
-  const summaries: string[] = [];
-
-  for (const section of sections) {
-    const trimmed = section.trim();
-    if (!trimmed) continue;
-    
-    // Assess content quality before processing
-    const qualityScore = assessContentQuality(trimmed);
-    
-    // Skip low-quality content entirely
-    if (qualityScore < 25) {
-      continue;
-    }
-    
-    const wordCount = trimmed.split(/\s+/).length;
-    
-    // Determine target length for multi-stage summarization
-    let targetLength = 60; // Default target length in words
-    let shouldSummarize = false;
-    
-    // Content type detection for specialized parameters
-    const hasTabularData = /\*\*Table\*\*/.test(trimmed);
-    const hasNumericData = (trimmed.match(/\d+/g) || []).length > wordCount * 0.1;
-    const hasListStructure = (trimmed.match(/^[-*+]\s/gm) || []).length > 3;
-    const isNarrative = /\b(story|narrative|article|report)\b/i.test(trimmed);
-    
-    if (qualityScore >= 70) {
-      // High-quality: summarize if over 300 words (reduced threshold)
-      shouldSummarize = wordCount > 300;
-      targetLength = hasTabularData || hasNumericData ? 90 : 70;
-      
-    } else if (qualityScore >= 50) {
-      // Medium-quality: summarize if over 500 words
-      shouldSummarize = wordCount > 500;
-      targetLength = hasListStructure ? 50 : 60;
-      
-    } else {
-      // Low-quality (25-49): only summarize if very long
-      shouldSummarize = wordCount > adaptiveChunkSize;
-      targetLength = 40; // Very concise for low-quality content
-    }
-    
-    if (shouldSummarize) {
-      // STAGE 1: CLASSIFY the content before summarizing
-      const classification = classifyContent(trimmed);
-      
-      // STAGE 4: COMPRESS using intelligent summarization
-      const summary = await intelligentSummarization(trimmed, targetLength, classification);
-      if (summary && summary.length > 20) {
-        summaries.push(summary);
-      } else {
-        // If summarization failed, keep original but truncated
-        summaries.push(trimmed.substring(0, 600) + (trimmed.length > 600 ? '...' : ''));
-      }
-    } else {
-      summaries.push(trimmed);
-    }
-  }
-
-  return summaries.join('\n\n---\n\n');
-}
-
-export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
   try {
     const dom = new JSDOM(rawHtml, { url });
-    const reader = new Readability(dom.window.document, { charThreshold: 500 });
+    const doc = dom.window.document;
+    
+    // Extract metadata before Readability processes the document
+    const metadata = extractDocumentMetadata(doc, url);
+    
+    // Get URL-based domain hints
+    const urlHints = opts.domain === 'auto' 
+      ? metadata.urlHints 
+      : { domain: opts.domain as ContentDomain, confidenceScore: 100 };
+    
+    // Adjust Readability threshold based on content length
+    const htmlLength = rawHtml.length;
+    const charThreshold = htmlLength > 50000 ? 800 : htmlLength > 20000 ? 600 : 500;
+    
+    const reader = new Readability(doc, { charThreshold });
     const article = reader.parse();
 
     if (!article?.content) {
@@ -981,21 +1155,176 @@ export async function cleanHtml(rawHtml: string, url: string): Promise<string> {
     // Remove junk inside article body
     const bodyDom = new JSDOM(article.content, { url });
     const body = bodyDom.window.document.body;
-    removeBoilerplate(body);
+    
+    // Apply boilerplate removal with custom selectors
+    removeBoilerplate(body, opts.additionalSelectorsToRemove);
+    
+    // Remove link-heavy navigation blocks
+    removeLinkHeavyBlocks(body);
 
     // Convert to Markdown
     let markdown = turndownService.turndown(body.innerHTML);
+    
+    // Remove boilerplate text patterns
+    markdown = removeBoilerplateText(markdown);
+    
     markdown = dedupeContent(prettyWhitespace(markdown));
 
     // Clean up markdown conversion artifacts using remark
     markdown = await cleanMarkdownArtifacts(markdown);
+    
+    // Add title if requested and available
+    if (opts.includeTitle && metadata.title) {
+      const titleLine = `# ${metadata.title}\n\n`;
+      if (!markdown.startsWith('# ')) {
+        markdown = titleLine + markdown;
+      }
+    }
 
-    // Summarize if oversized
-    const cleaned = await summarizeMarkdown(markdown);
+    // Summarize if oversized (pass URL hints for better classification)
+    const cleaned = await summarizeMarkdownWithHints(markdown, 700, urlHints, opts.minQualityScore);
+    
+    // Apply format-specific processing
+    let result = cleaned;
+    
+    if (opts.format === 'bullets') {
+      result = convertToBullets(cleaned);
+    } else if (opts.format === 'summary') {
+      // Additional compression for summary format
+      if (result.length > 1500) {
+        result = result.substring(0, 1500) + '...';
+      }
+    }
+    
+    // Apply max length if specified
+    if (opts.maxLength && opts.maxLength > 0 && result.length > opts.maxLength) {
+      result = result.substring(0, opts.maxLength - 3) + '...';
+    }
+    
+    // Remove links if not preserving them
+    if (!opts.preserveLinks) {
+      result = result.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+    }
 
-    return cleaned;
+    return result;
   } catch (error: any) {
     console.error(`Failed to clean HTML from ${url}:`, error?.message || error);
     throw new Error(`Error cleaning HTML from ${url}`);
   }
+}
+
+/**
+ * Summarize markdown with URL hints for better domain classification
+ */
+async function summarizeMarkdownWithHints(
+  markdown: string,
+  maxChunkWords = 700,
+  urlHints?: Partial<ContentClassification>,
+  minQualityScore = 25
+): Promise<string> {
+  // Assess overall content quality to determine optimal chunk size
+  const overallQuality = assessContentQuality(markdown);
+  
+  // Adjust chunk size based on quality
+  let adaptiveChunkSize = maxChunkWords;
+  if (overallQuality >= 70) {
+    adaptiveChunkSize = Math.floor(maxChunkWords * 1.4);
+  } else if (overallQuality >= 50) {
+    adaptiveChunkSize = Math.floor(maxChunkWords * 1.2);
+  } else if (overallQuality < 30) {
+    adaptiveChunkSize = Math.floor(maxChunkWords * 0.8);
+  }
+  
+  const sections = intelligentChunk(markdown, adaptiveChunkSize);
+  const summaries: string[] = [];
+
+  for (const section of sections) {
+    const trimmed = section.trim();
+    if (!trimmed) continue;
+    
+    const qualityScore = assessContentQuality(trimmed);
+    
+    // Skip low-quality content based on configurable threshold
+    if (qualityScore < minQualityScore) {
+      continue;
+    }
+    
+    const wordCount = trimmed.split(/\s+/).length;
+    
+    let targetLength = 60;
+    let shouldSummarize = false;
+    
+    const hasTabularData = /\*\*Table\*\*/.test(trimmed);
+    const hasNumericData = (trimmed.match(/\d+/g) || []).length > wordCount * 0.1;
+    const hasListStructure = (trimmed.match(/^[-*+]\s/gm) || []).length > 3;
+    
+    if (qualityScore >= 70) {
+      shouldSummarize = wordCount > 300;
+      targetLength = hasTabularData || hasNumericData ? 90 : 70;
+    } else if (qualityScore >= 50) {
+      shouldSummarize = wordCount > 500;
+      targetLength = hasListStructure ? 50 : 60;
+    } else {
+      shouldSummarize = wordCount > adaptiveChunkSize;
+      targetLength = 40;
+    }
+    
+    if (shouldSummarize) {
+      const classification = classifyContent(trimmed, urlHints);
+      const summary = await intelligentSummarization(trimmed, targetLength, classification);
+      if (summary && summary.length > 20) {
+        summaries.push(summary);
+      } else {
+        summaries.push(trimmed.substring(0, 600) + (trimmed.length > 600 ? '...' : ''));
+      }
+    } else {
+      summaries.push(trimmed);
+    }
+  }
+
+  return summaries.join('\n\n---\n\n');
+}
+
+/**
+ * Convert markdown content to bullet points format
+ */
+function convertToBullets(markdown: string): string {
+  const lines = markdown.split('\n');
+  const bullets: string[] = [];
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    
+    // Skip headers (they become section markers)
+    if (trimmed.startsWith('#')) {
+      const headerText = trimmed.replace(/^#+\s*/, '');
+      if (headerText.length > 3) {
+        bullets.push(`\n**${headerText}**`);
+      }
+      continue;
+    }
+    
+    // Skip horizontal rules
+    if (trimmed === '---') continue;
+    
+    // Already a bullet point
+    if (trimmed.startsWith('-') || trimmed.startsWith('*') || trimmed.startsWith('•')) {
+      bullets.push(trimmed);
+      continue;
+    }
+    
+    // Convert paragraphs to bullets
+    if (trimmed.length > 20) {
+      // Split long paragraphs at sentence boundaries
+      const sentences = trimmed.split(/(?<=[.!?])\s+/);
+      for (const sentence of sentences) {
+        if (sentence.trim().length > 15) {
+          bullets.push(`- ${sentence.trim()}`);
+        }
+      }
+    }
+  }
+  
+  return bullets.join('\n');
 }

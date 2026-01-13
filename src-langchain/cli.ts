@@ -23,6 +23,7 @@ import {
   printSuccess,
   showLoader,
 } from './ui';
+import { renderMarkdown } from './markdown';
 
 // Check if streaming is enabled via environment
 const STREAMING_ENABLED = process.env.CLI_STREAMING !== 'false';
@@ -102,24 +103,42 @@ async function main() {
 
       try {
         if (STREAMING_ENABLED) {
-          // Streaming mode
+          // Streaming mode - collect response then render
           printDivider();
-          process.stdout.write(chalk.green('Assistant: '));
+          console.log(chalk.green.bold('Assistant:'));
+          console.log();
+          
+          let fullResponse = '';
           
           const response = await runAgentStreaming(trimmedInput, {
             systemPrompt: getSystemPrompt(),
             tools,
             conversationManager,
             onToken: (token) => {
+              fullResponse += token;
+              // For streaming, show raw tokens with basic formatting
               process.stdout.write(token);
             },
             onToolCall: (toolName, args) => {
               console.log();
-              console.log(chalk.yellow(`  ⚙ Using tool: ${toolName}`));
+              console.log(chalk.yellow(`  ⚙ Using tool: ${chalk.bold(toolName)}`));
             },
           });
 
-          console.log(); // New line after streaming
+          // After streaming complete, clear and re-render with pretty markdown
+          // Move cursor up and clear the raw output, then print rendered version
+          if (fullResponse.trim()) {
+            // Clear the raw streamed output
+            const lines = fullResponse.split('\n').length + 2;
+            process.stdout.write(`\x1b[${lines}A\x1b[0J`);
+            
+            // Print beautifully rendered markdown
+            console.log(chalk.green.bold('Assistant:'));
+            console.log();
+            console.log(renderMarkdown(fullResponse));
+          }
+          
+          console.log();
           printDivider();
           console.log();
         } else {
@@ -134,9 +153,11 @@ async function main() {
 
           loader.stop();
 
-          // Display the response
+          // Display the response with pretty markdown rendering
           printDivider();
-          console.log(response.content);
+          console.log(chalk.green.bold('Assistant:'));
+          console.log();
+          console.log(renderMarkdown(response.content));
           printDivider();
           console.log();
         }
