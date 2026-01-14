@@ -5,11 +5,12 @@
  */
 
 import { marked } from 'marked';
-import TerminalRenderer from 'marked-terminal';
+import { markedTerminal } from 'marked-terminal';
 import chalk from 'chalk';
 
 // Configure marked to use the terminal renderer with options
-const terminalRenderer = new TerminalRenderer({
+// @ts-expect-error marked-terminal types don't match marked's MarkedExtension type
+marked.use(markedTerminal({
   // Customize colors to match our CLI theme
   code: chalk.yellow,
   blockquote: chalk.gray.italic,
@@ -35,12 +36,7 @@ const terminalRenderer = new TerminalRenderer({
   emoji: true,
   // Tab size for code
   tab: 2,
-});
-
-// Set the renderer on marked (use 'as any' to bypass strict type checking)
-marked.setOptions({
-  renderer: terminalRenderer as any,
-});
+}));
 
 /**
  * Render markdown to beautiful terminal output

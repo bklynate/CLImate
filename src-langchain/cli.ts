@@ -103,9 +103,9 @@ async function main() {
 
       try {
         if (STREAMING_ENABLED) {
-          // Streaming mode - collect response then render
+          // Streaming mode - collect response silently, then render markdown at end
           printDivider();
-          console.log(chalk.green.bold('Assistant:'));
+          console.log(chalk.gray('Assistant:'));
           console.log();
           
           let fullResponse = '';
@@ -116,8 +116,8 @@ async function main() {
             conversationManager,
             onToken: (token) => {
               fullResponse += token;
-              // For streaming, show raw tokens with basic formatting
-              process.stdout.write(token);
+              // Show a simple dot for progress indication
+              process.stdout.write(chalk.gray('.'));
             },
             onToolCall: (toolName, args) => {
               console.log();
@@ -125,19 +125,9 @@ async function main() {
             },
           });
 
-          // After streaming complete, clear and re-render with pretty markdown
-          // Move cursor up and clear the raw output, then print rendered version
-          if (fullResponse.trim()) {
-            // Clear the raw streamed output
-            const lines = fullResponse.split('\n').length + 2;
-            process.stdout.write(`\x1b[${lines}A\x1b[0J`);
-            
-            // Print beautifully rendered markdown
-            console.log(chalk.green.bold('Assistant:'));
-            console.log();
-            console.log(renderMarkdown(fullResponse));
-          }
-          
+          // Clear the dots and show rendered markdown
+          process.stdout.write('\r\x1b[K'); // Clear line
+          console.log(renderMarkdown(fullResponse));
           console.log();
           printDivider();
           console.log();
@@ -155,7 +145,7 @@ async function main() {
 
           // Display the response with pretty markdown rendering
           printDivider();
-          console.log(chalk.green.bold('Assistant:'));
+          console.log(chalk.gray('Assistant:'));
           console.log();
           console.log(renderMarkdown(response.content));
           printDivider();
