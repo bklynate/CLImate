@@ -55,7 +55,16 @@ export function renderMarkdown(markdown: string): string {
     
     // marked.parse returns Promise<string> | string, but with sync renderer it's string
     if (typeof rendered === 'string') {
-      return rendered.trim();
+      // Post-process: marked-terminal doesn't handle bold/italic inside list items
+      // So we need to apply those manually to any remaining markdown syntax
+      let result = rendered
+        // Bold text that wasn't converted
+        .replace(/\*\*(.+?)\*\*/g, chalk.bold('$1'))
+        // Italic text that wasn't converted
+        .replace(/\*([^*\n]+)\*/g, chalk.italic('$1'))
+        .replace(/_([^_\n]+)_/g, chalk.italic('$1'));
+      
+      return result.trim();
     }
     
     // Fallback for async case (shouldn't happen with terminal renderer)
