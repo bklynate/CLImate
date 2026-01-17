@@ -1,11 +1,25 @@
-import { currentLocationToolDefinition } from './currentLocation';
-import { currentWeatherToolDefinition } from './weather/currentWeather';
-import { queryDuckDuckGoToolDefinition } from './webScraper/queryDuckDuckGo';
-import { currentDateTimeToolDefinition } from './dateTime';
+// LangChain Tools Index
+// Export all tools for use with the agent
 
+import { currentDateTimeTool } from './dateTime';
+import { currentLocationTool } from './currentLocation';
+import { currentWeatherTool } from './weather';
+import { queryDuckDuckGoTool } from './webSearch';
+
+// Export individual tools
+export {
+  currentDateTimeTool,
+  currentLocationTool,
+  currentWeatherTool,
+  queryDuckDuckGoTool,
+};
+
+// Export as array for use with createReactAgent
 export const tools = [
-  queryDuckDuckGoToolDefinition,
-  currentWeatherToolDefinition,
-  currentLocationToolDefinition,
-  currentDateTimeToolDefinition,
+  currentDateTimeTool,
+  currentLocationTool,
+  currentWeatherTool,
+  queryDuckDuckGoTool,
 ];
+
+export default tools;

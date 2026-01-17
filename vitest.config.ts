@@ -6,14 +6,14 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: [
-      'src-langchain/**/*.test.ts',
+      'src/**/*.test.ts',
       'src/**/__tests__/**/*.test.ts',
     ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['src-langchain/**/*.ts', 'src/**/*.ts'],
-      exclude: ['src-langchain/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
+      include: ['src/**/*.ts'],
+      exclude: ['src/**/*.test.ts', 'src/**/__tests__/**/*.ts'],
     },
     testTimeout: 60000, // 60 seconds for ML model loading
   },
