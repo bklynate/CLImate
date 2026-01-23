@@ -1,7 +1,6 @@
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import TurndownService from 'turndown';
-import { addMessages } from '@src/memory';
 import { pipeline } from '@xenova/transformers';
 import type {
   CleanHtmlOptions,
@@ -1143,12 +1142,7 @@ export async function cleanHtml(
     const article = reader.parse();
 
     if (!article?.content) {
-      await addMessages([
-        {
-          role: 'assistant',
-          content: `No readable content found at ${url}.`,
-        },
-      ]);
+      console.warn(`No readable content found at ${url}`);
       return '';
     }
 

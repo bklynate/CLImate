@@ -36,3 +36,7 @@
 {"level":"info","message":"[cli] User force closed","timestamp":"2026-01-17T17:12:03.313Z"}
 {"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-17T17:16:40.464Z"}
 {"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-17T17:16:40.480Z"}
+{"level":"info","message":"[cli] CLI started","streaming":true,"threadId":"4be80a59-e579-4148-bac7-dbe543d33fcf","timestamp":"2026-01-23T01:48:43.510Z"}
+{"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-01-23T02:01:32.225Z"}
+{"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-01-23T02:01:32.241Z"}
+{"level":"info","message":"[cli] CLI started","streaming":true,"threadId":"5e776c5e-4e2c-45b5-8a2c-467e819fb714","timestamp":"2026-01-23T02:29:44.300Z"}
