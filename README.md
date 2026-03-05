@@ -59,15 +59,32 @@ DB_FILE=db.json                # Conversation storage file
 ### Running the CLI
 
 ```bash
-# Start the interactive CLI
+# Start with interactive provider prompt (no flags)
 npm start
 
-# Or use the cli command directly
-npm run cli
+# Specify a provider directly
+npm start -- --provider=ollama --model=llama4:scout
+npm start -- --provider=lmstudio
+npm start -- --provider=openai --model=gpt-4o
+
+# Convenience shortcuts
+npm run cli:ollama              # prompts for model name
+npm run cli:lmstudio            # no model needed
+npm run cli:openai              # prompts for model name
 
 # Start fresh (clears conversation history)
 npm run cli:reset
 ```
+
+#### Provider Flags
+
+| Flag | Description |
+|------|-------------|
+| `--provider=ollama` | Use a local Ollama instance. `--model` required (or prompted). |
+| `--provider=lmstudio` | Use LM Studio. Model is set inside the LM Studio app; `--model` is ignored. |
+| `--provider=openai` | Use OpenAI API. `--model` required (or prompted). Requires `OPENAI_API_KEY`. |
+
+When **no `--provider` flag** is passed, the CLI presents an interactive menu to choose a provider and, if needed, a model.
 
 ---
 
@@ -141,6 +158,9 @@ src/
 |---------|-------------|
 | `npm start` | Run the CLI (same as `npm run cli`) |
 | `npm run cli` | Run the interactive CLI |
+| `npm run cli:ollama` | Run CLI with Ollama provider |
+| `npm run cli:lmstudio` | Run CLI with LM Studio provider |
+| `npm run cli:openai` | Run CLI with OpenAI provider |
 | `npm run cli:reset` | Clear history and run CLI |
 | `npm run dev` | Run test entry point |
 | `npm run dev:reset` | Clear history and run dev |

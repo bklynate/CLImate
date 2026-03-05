@@ -4,11 +4,19 @@
  * 
  * Interactive command-line interface for the LangChain-powered AI assistant.
  * Supports both streaming and non-streaming modes.
+ * 
+ * Usage:
+ *   npm start -- --provider=ollama --model=llama4:scout
+ *   npm start -- --provider=lmstudio
+ *   npm start -- --provider=openai --model=gpt-4o
+ *   npm start                          (interactive prompt)
  */
 
 import 'dotenv/config';
-import { input } from '@inquirer/prompts';
+import { Command } from 'commander';
+import { input, select } from '@inquirer/prompts';
 import { runAgent, runAgentStreaming } from './agent';
+import type { ModelConfig } from './ai';
 import { tools } from './tools';
 import { ConversationManager } from './memory';
 import { getSystemPrompt } from './systemPrompt';
@@ -21,9 +29,89 @@ import {
   printError, 
   printInfo,
   printSuccess,
+  printWarning,
   showLoader,
 } from './ui';
 import { renderMarkdown } from './markdown';
+
+// ── CLI argument parsing ────────────────────────────────────────────────────
+
+const program = new Command()
+  .name('climate')
+  .description('CLImate – LangChain-powered AI assistant')
+  .option('--provider <name>', 'LLM provider: ollama | lmstudio | openai')
+  .option('--model <name>', 'Model name (required for ollama/openai, ignored for lmstudio)')
+  .allowUnknownOption()   // don't choke on npm/tsx flags
+  .parse(process.argv);
+
+const cliOpts = program.opts<{ provider?: string; model?: string }>();
+
+// ── Provider resolution ─────────────────────────────────────────────────────
+
+type ProviderChoice = 'ollama' | 'lmstudio' | 'openai';
+
+const VALID_PROVIDERS = ['ollama', 'lmstudio', 'openai'] as const;
+
+/**
+ * Resolve provider + model from CLI flags, falling back to an interactive
+ * prompt when no --provider flag is given.
+ */
+async function resolveProviderConfig(): Promise<Partial<ModelConfig>> {
+  let provider: ProviderChoice;
+  let model: string | undefined = cliOpts.model;
+
+  // ─── Determine provider ───────────────────────────────────────────────
+  if (cliOpts.provider) {
+    const raw = cliOpts.provider.toLowerCase().trim();
+    if (!VALID_PROVIDERS.includes(raw as ProviderChoice)) {
+      console.error(
+        chalk.red(`Invalid provider "${cliOpts.provider}". Must be one of: ${VALID_PROVIDERS.join(', ')}`)
+      );
+      process.exit(1);
+    }
+    provider = raw as ProviderChoice;
+  } else {
+    // Interactive prompt
+    provider = await select<ProviderChoice>({
+      message: 'Select an LLM provider',
+      choices: [
+        { name: 'Ollama   (local)', value: 'ollama' },
+        { name: 'LM Studio (local)', value: 'lmstudio' },
+        { name: 'OpenAI   (cloud)', value: 'openai' },
+      ],
+    });
+  }
+
+  // ─── LM Studio: model is irrelevant ──────────────────────────────────
+  if (provider === 'lmstudio') {
+    if (model) {
+      printWarning('--model is ignored for LM Studio (the model is set inside LM Studio).');
+    }
+    return { provider: 'lmstudio' };
+  }
+
+  // ─── Ollama / OpenAI: resolve model ──────────────────────────────────
+  if (!model) {
+    const defaultModel = provider === 'openai'
+      ? (process.env.LLM_MODEL || 'gpt-4o')
+      : (process.env.LLM_MODEL || 'llama4:scout');
+
+    model = await input({
+      message: `Enter the model name for ${provider}`,
+      default: defaultModel,
+    });
+  }
+
+  // ─── OpenAI: require API key ─────────────────────────────────────────
+  if (provider === 'openai' && !process.env.OPENAI_API_KEY) {
+    console.error(
+      chalk.red('OPENAI_API_KEY environment variable is required for the OpenAI provider.')
+    );
+    process.exit(1);
+  }
+
+  return { provider, model };
+}
 
 // Check if streaming is enabled via environment
 const STREAMING_ENABLED = process.env.CLI_STREAMING !== 'false';
@@ -32,17 +120,23 @@ const STREAMING_ENABLED = process.env.CLI_STREAMING !== 'false';
  * Main CLI loop
  */
 async function main() {
+  // Resolve provider/model from flags or interactive prompt
+  const modelConfig = await resolveProviderConfig();
+
   // Initialize conversation manager
   const conversationManager = new ConversationManager();
   await conversationManager.initialize();
 
   cliLogger.info('CLI started', { 
     threadId: conversationManager.getThreadId(),
-    streaming: STREAMING_ENABLED 
+    streaming: STREAMING_ENABLED,
+    provider: modelConfig.provider,
+    model: modelConfig.model,
   });
 
   // Print welcome message
   printWelcome();
+  printInfo(`Provider: ${chalk.bold(modelConfig.provider)}${modelConfig.model ? ` | Model: ${chalk.bold(modelConfig.model)}` : ''}`);
   printInfo(`Thread ID: ${conversationManager.getThreadId()}`);
   printInfo(`Loaded ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`);
   if (STREAMING_ENABLED) {
@@ -111,6 +205,7 @@ async function main() {
           let fullResponse = '';
           
           const response = await runAgentStreaming(trimmedInput, {
+            modelConfig,
             systemPrompt: getSystemPrompt(),
             tools,
             conversationManager,
@@ -136,6 +231,7 @@ async function main() {
           const loader = showLoader('Thinking...');
 
           const response = await runAgent(trimmedInput, {
+            modelConfig,
             systemPrompt: getSystemPrompt(),
             tools,
             conversationManager,

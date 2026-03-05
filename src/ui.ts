@@ -130,3 +130,10 @@ export const printInfo = (message: string) => {
 export const printSuccess = (message: string) => {
   console.log(chalk.green(`✓ ${message}`));
 };
+
+/**
+ * Print warning message
+ */
+export const printWarning = (message: string) => {
+  console.log(chalk.yellow(`⚠ ${message}`));
+};
