@@ -5,6 +5,15 @@
  * Uses GET /v4/sports/{sport}/scores
  *
  * Quota cost: 1 credit (or 2 if daysFrom is specified for completed games)
+ *
+ * NOTE: The `daysFrom` parameter uses UTC-based day boundaries on the
+ * Odds API server side — we cannot control this.  For timezone-accurate
+ * date filtering, the recommended workflow is:
+ *   1. Call `get_sports_events` with `dateLocal` + `timezone` to get game IDs
+ *   2. Then use those IDs (or the returned commence_times) to cross-reference
+ *      with scores from this endpoint.
+ * This avoids the UTC boundary edge case where a late-night US game falls
+ * on the next UTC calendar day.
  */
 
 import { tool } from '@langchain/core/tools';

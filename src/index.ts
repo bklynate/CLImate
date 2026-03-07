@@ -9,6 +9,7 @@ import 'dotenv/config';
 import { runAgent } from './agent';
 import { tools } from './tools';
 import { ConversationManager } from './memory';
+import { getSystemPrompt } from './systemPrompt';
 
 const testMessage = process.argv[2] || 'Hello! What can you help me with today?';
 
@@ -30,7 +31,7 @@ async function main() {
     console.log();
 
     const response = await runAgent(testMessage, {
-      systemPrompt: 'You are a helpful AI assistant. Be concise and friendly. You have access to tools for getting the current date/time, location, weather, and web search.',
+      systemPrompt: getSystemPrompt(),
       tools,
       conversationManager,
     });

@@ -116,12 +116,43 @@ async function resolveProviderConfig(): Promise<Partial<ModelConfig>> {
 // Check if streaming is enabled via environment
 const STREAMING_ENABLED = process.env.CLI_STREAMING !== 'false';
 
+// ── Timezone detection ──────────────────────────────────────────────────────
+
+/**
+ * Detect the user's IANA timezone via IP geolocation (ipapi.co).
+ * Called once at startup and cached for the session.
+ * Falls back to America/New_York on any error.
+ */
+async function detectTimezone(): Promise<string> {
+  const fallback = 'America/New_York';
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+
+    const resp = await fetch('https://ipapi.co/json/', {
+      headers: { 'User-Agent': 'nodejs-climate-tz-detect/1.0' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!resp.ok) return fallback;
+    const data = (await resp.json()) as Record<string, unknown>;
+    const tz = data.timezone as string | undefined;
+    return tz || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * Main CLI loop
  */
 async function main() {
   // Resolve provider/model from flags or interactive prompt
   const modelConfig = await resolveProviderConfig();
+
+  // Detect user timezone via IP geolocation (one-time, cached for session)
+  const userTimezone = await detectTimezone();
 
   // Initialize conversation manager
   const conversationManager = new ConversationManager();
@@ -132,11 +163,13 @@ async function main() {
     streaming: STREAMING_ENABLED,
     provider: modelConfig.provider,
     model: modelConfig.model,
+    timezone: userTimezone,
   });
 
   // Print welcome message
   printWelcome();
   printInfo(`Provider: ${chalk.bold(modelConfig.provider)}${modelConfig.model ? ` | Model: ${chalk.bold(modelConfig.model)}` : ''}`);
+  printInfo(`Timezone: ${chalk.bold(userTimezone)}`);
   printInfo(`Thread ID: ${conversationManager.getThreadId()}`);
   printInfo(`Loaded ${tools.length} tools: ${tools.map(t => t.name).join(', ')}`);
   if (STREAMING_ENABLED) {
@@ -206,7 +239,7 @@ async function main() {
           
           const response = await runAgentStreaming(trimmedInput, {
             modelConfig,
-            systemPrompt: getSystemPrompt(),
+            systemPrompt: getSystemPrompt(userTimezone),
             tools,
             conversationManager,
             onToken: (token) => {
@@ -232,7 +265,7 @@ async function main() {
 
           const response = await runAgent(trimmedInput, {
             modelConfig,
-            systemPrompt: getSystemPrompt(),
+            systemPrompt: getSystemPrompt(userTimezone),
             tools,
             conversationManager,
           });

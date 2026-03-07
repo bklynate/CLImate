@@ -96,14 +96,25 @@ export const messageToStored = (message: BaseMessage): StoredMessage => {
 };
 
 /**
- * Convert a stored message back to a LangChain message
+ * Convert a stored message back to a LangChain message.
+ * For human and ai messages, prepends a temporal marker so the LLM
+ * can see when each turn was sent (useful for multi-session context).
  */
 export const storedToMessage = (stored: StoredMessage): BaseMessage => {
+  // Prepend a lightweight timestamp for human & ai messages so the LLM
+  // can reason about time gaps between turns.
+  const addTimestamp = (content: string): string => {
+    if (stored.createdAt) {
+      return `[sent: ${stored.createdAt}] ${content}`;
+    }
+    return content;
+  };
+
   switch (stored.type) {
     case 'human':
-      return new HumanMessage(stored.content);
-    case 'ai':
-      const aiMsg = new AIMessage(stored.content);
+      return new HumanMessage(addTimestamp(stored.content));
+    case 'ai': {
+      const aiMsg = new AIMessage(addTimestamp(stored.content));
       if (stored.toolCalls) {
         aiMsg.tool_calls = stored.toolCalls.map(tc => ({
           id: tc.id,
@@ -113,6 +124,7 @@ export const storedToMessage = (stored: StoredMessage): BaseMessage => {
         }));
       }
       return aiMsg;
+    }
     case 'system':
       return new SystemMessage(stored.content);
     case 'tool':
