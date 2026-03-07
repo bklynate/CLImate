@@ -62,3 +62,4 @@
 {"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-03-07T16:19:29.704Z"}
 {"level":"debug","message":"[config] Configuration loaded successfully","model":"gpt-4o","provider":"openai","timestamp":"2026-03-07T16:33:15.944Z"}
 {"level":"error","message":"[config] Configuration validation failed:\n  - LLM_PROVIDER: Invalid enum value. Expected 'ollama' | 'lmstudio' | 'lm-studio' | 'openai', received 'invalid-provider'","timestamp":"2026-03-07T16:33:15.971Z"}
+{"level":"info","message":"[cli] User force closed","timestamp":"2026-03-07T16:44:32.617Z"}
