@@ -49,6 +49,7 @@ LLM_TEMPERATURE=0.1            # 0-2, lower = more deterministic
 # API Keys
 OPENAI_API_KEY=                # Required only for openai provider
 TOMORROW_WEATHER_API_KEY=      # Required for weather tool
+THE_ODDS_API_KEY=              # Required for sports betting tools (free: 500 req/month)
 
 # Optional Configuration
 LOG_LEVEL=info                 # error | warn | info | debug
@@ -147,6 +148,28 @@ src/
 | `current_location` | IP-based geolocation | None |
 | `current_weather` | Weather data via Tomorrow.io API | `TOMORROW_WEATHER_API_KEY` |
 | `query_duckduckgo` | Web search with content extraction | None |
+| `calculate` | Mathematical expression evaluation | None |
+| `get_sports_events` | List upcoming/live games for NBA, NFL, MLB | `THE_ODDS_API_KEY` (FREE endpoint) |
+| `get_sports_odds` | Betting odds from US bookmakers | `THE_ODDS_API_KEY` (1+ credits) |
+| `get_sports_scores` | Live & completed game scores | `THE_ODDS_API_KEY` (1-2 credits) |
+| `get_standings` | League standings via ESPN | None |
+
+### Sports Betting Tools
+
+The agent includes 4 sports tools powered by [The Odds API](https://the-odds-api.com/) and ESPN:
+
+- **Supported sports**: NBA, NFL, MLB
+- **Odds API free tier**: 500 requests/month — the agent is trained to conserve quota
+- **ESPN standings**: Unlimited, no API key required
+
+**Recommended workflow** (how the agent uses these tools):
+
+1. `get_sports_events` — Lists upcoming games (FREE, no quota cost)
+2. `get_sports_odds` — Fetches moneyline/spreads/totals from FanDuel, DraftKings, BetMGM, etc.
+3. `get_sports_scores` — Gets live scores and recent results
+4. `get_standings` — Current league standings from ESPN (FREE)
+
+To enable, add `THE_ODDS_API_KEY` to your `.env` file. Get a free key at [the-odds-api.com](https://the-odds-api.com/#get-access).
 
 ---
 
@@ -228,6 +251,7 @@ export const myTool = tool(
 | `LLM_TEMPERATURE` | `0.1` | Response randomness (0-2) |
 | `OPENAI_API_KEY` | - | Required for OpenAI provider |
 | `TOMORROW_WEATHER_API_KEY` | - | Required for weather tool |
+| `THE_ODDS_API_KEY` | - | Required for sports betting tools (free: 500 req/month) |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` \| `verbose` |
 | `LOG_DIR` | `.` | Directory for log files |
 | `LOG_TO_CONSOLE` | `true` | Enable console logging |

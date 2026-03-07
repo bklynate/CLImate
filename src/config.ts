@@ -37,6 +37,9 @@ const envSchema = z.object({
   TOMORROW_WEATHER_API_KEY: z.string()
     .optional()
     .describe('Tomorrow.io API key for weather tool'),
+  THE_ODDS_API_KEY: z.string()
+    .optional()
+    .describe('The Odds API key for sports betting odds'),
 
   // Logging Configuration
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug', 'verbose'])
@@ -150,13 +153,15 @@ export const getProviderConfig = (): ProviderConfig => {
 /**
  * Check if a specific tool's API key is configured
  */
-export const hasApiKey = (keyName: 'weather' | 'openai'): boolean => {
+export const hasApiKey = (keyName: 'weather' | 'openai' | 'odds'): boolean => {
   const config = getConfig();
   switch (keyName) {
     case 'weather':
       return !!config.TOMORROW_WEATHER_API_KEY;
     case 'openai':
       return !!config.OPENAI_API_KEY;
+    case 'odds':
+      return !!config.THE_ODDS_API_KEY;
     default:
       return false;
   }
@@ -165,13 +170,15 @@ export const hasApiKey = (keyName: 'weather' | 'openai'): boolean => {
 /**
  * Get API key for a specific service
  */
-export const getApiKey = (keyName: 'weather' | 'openai'): string | undefined => {
+export const getApiKey = (keyName: 'weather' | 'openai' | 'odds'): string | undefined => {
   const config = getConfig();
   switch (keyName) {
     case 'weather':
       return config.TOMORROW_WEATHER_API_KEY;
     case 'openai':
       return config.OPENAI_API_KEY;
+    case 'odds':
+      return config.THE_ODDS_API_KEY;
     default:
       return undefined;
   }
@@ -218,6 +225,7 @@ export const printConfigSummary = (): void => {
   console.log(`  DB File: ${config.DB_FILE}`);
   console.log(`  Weather API: ${hasApiKey('weather') ? '✓ configured' : '✗ not set'}`);
   console.log(`  OpenAI API: ${hasApiKey('openai') ? '✓ configured' : '✗ not set'}`);
+  console.log(`  Odds API: ${hasApiKey('odds') ? '✓ configured' : '✗ not set'}`);
   console.log();
 };
 
